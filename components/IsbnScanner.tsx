@@ -19,7 +19,14 @@ interface IsbnScannerProps {
 }
 
 export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScannerProps) {
-  const [manualIsbn, setManualIsbn] = useState('')
+  const [book, setBook] = useState<{
+  isbn: string
+  titulo: string
+  autor: string
+  portada_url: string
+  genero?: string | null
+  sinopsis?: string | null
+} | null>(null)
   const [book, setBook] = useState<BookData | null>(null)
   const [status, setStatus] = useState<'scanning' | 'searching' | 'found' | 'saving' | 'saved' | 'error'>('scanning')
   const [errorMsg, setErrorMsg] = useState('')
@@ -105,6 +112,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           titulo: info.title || 'Sin título',
           autor: info.authors ? info.authors.join(', ') : 'Autor desconocido',
           portada_url: info.imageLinks?.thumbnail?.replace('http://', 'https://') || '',
+          genero: Array.isArray(info.categories) && info.categories.length > 0 ? info.categories[0] : null,
+          sinopsis: info.description || null,
         })
         setStatus('found')
         return
@@ -147,14 +156,16 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         .maybeSingle()
 
       if (!existe) {
-        const { error: catError } = await supabase
-          .from('libros_catalogo')
-          .insert({
-            isbn: book.isbn,
-            titulo: book.titulo,
-            autor: book.autor,
-            portada_url: book.portada_url,
-          })
+        const { error: catError } = await supabase.from('libros_catalogo').upsert([
+            {
+              isbn: book.isbn,
+              titulo: book.titulo,
+              autor: book.autor,
+              portada_url: book.portada_url,
+              genero: book.genero || null,
+              sinopsis: book.sinopsis || null,
+            }
+          ])
 
         if (catError) throw catError
       }
