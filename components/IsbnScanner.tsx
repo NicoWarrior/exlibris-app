@@ -10,6 +10,8 @@ interface BookData {
   titulo: string
   autor: string
   portada_url: string
+  genero?: string | null
+  sinopsis?: string | null
 }
 
 interface IsbnScannerProps {
@@ -19,15 +21,8 @@ interface IsbnScannerProps {
 }
 
 export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScannerProps) {
-  const [book, setBook] = useState<{
-  isbn: string
-  titulo: string
-  autor: string
-  portada_url: string
-  genero?: string | null
-  sinopsis?: string | null
-} | null>(null)
   const [book, setBook] = useState<BookData | null>(null)
+  const [manualIsbn, setManualIsbn] = useState('')
   const [status, setStatus] = useState<'scanning' | 'searching' | 'found' | 'saving' | 'saved' | 'error'>('scanning')
   const [errorMsg, setErrorMsg] = useState('')
   const scannerRef = useRef<Html5Qrcode | null>(null)
@@ -96,6 +91,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           titulo: existingBook.titulo,
           autor: existingBook.autor || 'Autor desconocido',
           portada_url: existingBook.portada_url || '',
+          genero: existingBook.genero || null,
+          sinopsis: existingBook.sinopsis || null,
         })
         setStatus('found')
         return
@@ -130,6 +127,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           titulo: olBook.title || 'Sin título',
           autor: olBook.authors ? olBook.authors.map((a: any) => a.name).join(', ') : 'Autor desconocido',
           portada_url: olBook.cover?.medium || '',
+          genero: olBook.subjects?.[0]?.name || null,
+          sinopsis: null,
         })
         setStatus('found')
         return
@@ -148,27 +147,19 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     setStatus('saving')
 
     try {
-      // 1. Verificar si ya existe en catálogo global; si no, insertarlo
-      const { data: existe } = await supabase
-        .from('libros_catalogo')
-        .select('isbn')
-        .eq('isbn', book.isbn)
-        .maybeSingle()
+      // 1. Insertar o actualizar en catálogo global
+      const { error: catError } = await supabase.from('libros_catalogo').upsert([
+        {
+          isbn: book.isbn,
+          titulo: book.titulo,
+          autor: book.autor,
+          portada_url: book.portada_url,
+          genero: book.genero || null,
+          sinopsis: book.sinopsis || null,
+        },
+      ])
 
-      if (!existe) {
-        const { error: catError } = await supabase.from('libros_catalogo').upsert([
-            {
-              isbn: book.isbn,
-              titulo: book.titulo,
-              autor: book.autor,
-              portada_url: book.portada_url,
-              genero: book.genero || null,
-              sinopsis: book.sinopsis || null,
-            }
-          ])
-
-        if (catError) throw catError
-      }
+      if (catError) throw catError
 
       // 2. Comprobar si YA tienes este libro en tu estantería
       const { data: yaLoTengo } = await supabase
@@ -278,6 +269,11 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 <span className="text-[11px] font-mono text-stone-400">ISBN: {book.isbn}</span>
                 <h3 className="font-bold text-stone-900 leading-snug mt-0.5">{book.titulo}</h3>
                 <p className="text-sm text-stone-600 mt-1">{book.autor}</p>
+                {book.genero && (
+                  <span className="inline-block mt-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-700">
+                    {book.genero}
+                  </span>
+                )}
               </div>
             </div>
 
