@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/client'
 import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
 import PrestamosTab from '@/components/PrestamosTab'
+import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import { ArrowLeftRight, BookOpen, LogOut, Plus, ScanBarcode, Users } from 'lucide-react'
 
 interface LibroEstanteria {
@@ -15,6 +16,8 @@ interface LibroEstanteria {
     titulo: string
     autor: string
     portada_url: string
+    genero?: string | null
+    sinopsis?: string | null
   }
 }
 
@@ -25,10 +28,10 @@ export default function Home() {
   const [misLibros, setMisLibros] = useState<LibroEstanteria[]>([])
   const [pendientesCount, setPendientesCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
+  const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
   const supabase = createClient()
 
   const cargarDatos = useCallback(async (uid: string) => {
-    // 1. Cargar ejemplares propios
     const { data: ejemplaresData, error: ejError } = await supabase
       .from('ejemplares')
       .select('id, isbn, estado')
@@ -41,7 +44,7 @@ export default function Home() {
         const isbns = ejemplaresData.map((e) => e.isbn)
         const { data: catalogoData } = await supabase
           .from('libros_catalogo')
-          .select('isbn, titulo, autor, portada_url')
+          .select('isbn, titulo, autor, portada_url, genero, sinopsis')
           .in('isbn', isbns)
 
         const combinados = ejemplaresData.map((ej) => ({
@@ -52,13 +55,14 @@ export default function Home() {
             titulo: `ISBN: ${ej.isbn}`,
             autor: 'Sin datos en catálogo',
             portada_url: '',
+            genero: null,
+            sinopsis: null,
           },
         }))
         setMisLibros(combinados)
       }
     }
 
-    // 2. Contar solicitudes de préstamo pendientes de aprobar
     const { count } = await supabase
       .from('prestamos')
       .select('id', { count: 'exact', head: true })
@@ -93,13 +97,6 @@ export default function Home() {
     await supabase.auth.signOut()
     setUser(null)
     setMisLibros([])
-  }
-
-  const alternarDisponibilidad = async (libro: LibroEstanteria) => {
-    if (libro.estado === 'prestado') return
-    const nuevoEstado = libro.estado === 'disponible' ? 'no disponible' : 'disponible'
-    await supabase.from('ejemplares').update({ estado: nuevoEstado }).eq('id', libro.id)
-    if (user) cargarDatos(user.id)
   }
 
   if (loading) {
@@ -192,7 +189,21 @@ export default function Home() {
                 {misLibros.map((item) => (
                   <div
                     key={item.id}
-                    className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-sm flex flex-col"
+                    onClick={() =>
+                      setLibroSeleccionado({
+                        ejemplarId: item.id,
+                        estado: item.estado,
+                        propietarioNombre: user.user_metadata?.full_name || user.email || 'Tú',
+                        esPropio: true,
+                        isbn: item.libros_catalogo.isbn,
+                        titulo: item.libros_catalogo.titulo,
+                        autor: item.libros_catalogo.autor,
+                        portada_url: item.libros_catalogo.portada_url,
+                        genero: item.libros_catalogo.genero,
+                        sinopsis: item.libros_catalogo.sinopsis,
+                      })
+                    }
+                    className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-sm flex flex-col cursor-pointer hover:border-emerald-500 transition"
                   >
                     <div className="aspect-[2/3] bg-stone-100 relative">
                       {item.libros_catalogo?.portada_url ? (
@@ -206,10 +217,8 @@ export default function Home() {
                           Sin portada
                         </div>
                       )}
-                      <button
-                        onClick={() => alternarDisponibilidad(item)}
-                        title="Toca para alternar disponible / no disponible"
-                        className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full cursor-pointer shadow-sm ${
+                      <span
+                        className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm ${
                           item.estado === 'disponible'
                             ? 'bg-emerald-100 text-emerald-800'
                             : item.estado === 'prestado'
@@ -217,8 +226,12 @@ export default function Home() {
                             : 'bg-amber-100 text-amber-800'
                         }`}
                       >
-                        {item.estado}
-                      </button>
+                        {item.estado === 'disponible'
+                          ? 'Disponible'
+                          : item.estado === 'prestado'
+                          ? 'Prestado'
+                          : 'No disponible'}
+                      </span>
                     </div>
                     <div className="p-3 flex-1 flex flex-col justify-between">
                       <div>
@@ -246,7 +259,6 @@ export default function Home() {
         )}
       </main>
 
-      {/* Navegación inferior móvil */}
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-200 z-20">
         <div className="max-w-3xl mx-auto grid grid-cols-3 h-16">
           <button
@@ -295,6 +307,12 @@ export default function Home() {
           onBookAdded={() => cargarDatos(user.id)}
         />
       )}
+
+      <LibroModal
+        libro={libroSeleccionado}
+        onClose={() => setLibroSeleccionado(null)}
+        onActualizado={() => cargarDatos(user.id)}
+      />
     </div>
   )
 }
