@@ -9,9 +9,11 @@ import {
   Check,
   Copy,
   KeyRound,
+  MessageSquare,
   Plus,
   Search,
   Send,
+  Star,
   Tag,
   Users,
   X,
@@ -30,6 +32,8 @@ interface EjemplarClub {
   estado: string
   propietario_id: string
   propietario_nombre: string
+  resenas_count: number
+  media_estrellas: string | null
   libros_catalogo: {
     isbn: string
     titulo: string
@@ -130,23 +134,34 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         return
       }
 
-      // 3. Obtener nombres de los propietarios desde perfiles
+      // 3. Obtener nombres de los propietarios y metadatos del catálogo + reseñas del club
       const ownerIds = Array.from(new Set(ejemplaresData.map((e) => e.propietario_id)))
-      const { data: perfilesData } = await supabase
-        .from('perfiles')
-        .select('id, nombre, nombre_usuario')
-        .in('id', ownerIds)
-
-      // 4. Obtener metadatos enriquecidos del catálogo
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
-      const { data: catalogoData } = await supabase
-        .from('libros_catalogo')
-        .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
-        .in('isbn', isbns)
+
+      const [{ data: perfilesData }, { data: catalogoData }, { data: resenasData }] =
+        await Promise.all([
+          supabase.from('perfiles').select('id, nombre, nombre_usuario').in('id', ownerIds),
+          supabase
+            .from('libros_catalogo')
+            .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
+            .in('isbn', isbns),
+          supabase
+            .from('resenas_libro')
+            .select('isbn, puntuacion')
+            .eq('club_id', clubId)
+            .in('isbn', isbns),
+        ])
 
       const combinados: EjemplarClub[] = ejemplaresData.map((ej) => {
         const perfil = perfilesData?.find((p) => p.id === ej.propietario_id)
         const esMio = ej.propietario_id === userId
+        const resenasLibro = resenasData?.filter((r) => r.isbn === ej.isbn) || []
+        const media =
+          resenasLibro.length > 0
+            ? (
+                resenasLibro.reduce((acc, r) => acc + r.puntuacion, 0) / resenasLibro.length
+              ).toFixed(1)
+            : null
 
         return {
           id: ej.id,
@@ -156,6 +171,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
           propietario_nombre: esMio
             ? 'Tú'
             : perfil?.nombre || perfil?.nombre_usuario || `Miembro #${ej.propietario_id.slice(0, 4)}`,
+          resenas_count: resenasLibro.length,
+          media_estrellas: media,
           libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
             isbn: ej.isbn,
             titulo: `ISBN: ${ej.isbn}`,
@@ -296,7 +313,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setTimeout(() => setCopiado(false), 2000)
   }
 
-  // Conteo de ejemplares por género (aplicando primero la búsqueda de texto si existe)
   const termino = busqueda.trim().toLowerCase()
   const librosPorTexto = termino
     ? librosClub.filter(
@@ -338,7 +354,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         <div>
           <h1 className="text-lg font-bold text-stone-900">Mis Clubes</h1>
           <p className="text-xs text-stone-500">
-            Comparte estantería y pide libros en tus grupos privados
+            Comparte estantería, reseña lecturas y pide libros en tus grupos
           </p>
         </div>
         <div className="flex gap-2">
@@ -472,7 +488,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             </div>
           )}
 
-          {/* Buscador por título, autor o miembro + Barra de categorías con contador */}
+          {/* Buscador + Barra de categorías con contador */}
           {librosClub.length > 0 && (
             <div className="space-y-3">
               <div className="relative">
@@ -563,6 +579,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                         genero: item.libros_catalogo.genero,
                         sinopsis: item.libros_catalogo.sinopsis,
                         premios: item.libros_catalogo.premios,
+                        clubId: clubActivo?.id || null,
+                        clubNombre: clubActivo?.nombre || null,
                       })
                     }
                     className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-xs flex flex-col cursor-pointer hover:border-emerald-500 transition"
@@ -604,6 +622,14 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                           ? 'Prestado'
                           : 'No disponible'}
                       </span>
+
+                      {item.media_estrellas && (
+                        <span className="absolute bottom-2 left-2 bg-stone-900/85 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                          <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                          <span>{item.media_estrellas}</span>
+                          <span className="text-stone-300">({item.resenas_count})</span>
+                        </span>
+                      )}
                     </div>
 
                     <div className="p-3 flex-1 flex flex-col justify-between space-y-2.5">
@@ -614,9 +640,15 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                         <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">
                           {item.libros_catalogo?.autor}
                         </p>
-                        <p className="text-[10px] text-stone-400 mt-1">
-                          De: <strong className="text-stone-600">{item.propietario_nombre}</strong>
-                        </p>
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-[10px] text-stone-400">
+                            De: <strong className="text-stone-600">{item.propietario_nombre}</strong>
+                          </p>
+                          <span className="text-[10px] text-emerald-700 font-medium flex items-center gap-0.5">
+                            <MessageSquare className="w-2.5 h-2.5" />
+                            <span>Reseñar</span>
+                          </span>
+                        </div>
                       </div>
 
                       {!esMio && item.estado === 'disponible' && (
@@ -644,10 +676,13 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </>
       )}
 
-      {/* Modal de detalle de libro */}
+      {/* Modal de detalle de libro con reseñas del club */}
       <LibroModal
         libro={libroSeleccionado}
-        onClose={() => setLibroSeleccionado(null)}
+        onClose={() => {
+          setLibroSeleccionado(null)
+          if (clubActivo) cargarLibrosDelClub(clubActivo.id)
+        }}
         onActualizado={() => clubActivo && cargarLibrosDelClub(clubActivo.id)}
       />
     </div>

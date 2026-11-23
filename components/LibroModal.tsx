@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { extraerPremios, GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import {
@@ -10,8 +10,10 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  MessageSquare,
   Pencil,
   RefreshCw,
+  Star,
   Tag,
   Trash2,
   User,
@@ -31,11 +33,23 @@ export interface LibroDetalle {
   genero?: string | null
   sinopsis?: string | null
   premios?: string | null
+  clubId?: string | null
+  clubNombre?: string | null
 }
 
 interface ClubOpcion {
   id: string
   nombre: string
+}
+
+interface ResenaItem {
+  id: string
+  usuario_id: string
+  autor_nombre: string
+  puntuacion: number
+  comentario: string
+  creado_en: string
+  es_mia: boolean
 }
 
 interface LibroModalProps {
@@ -60,6 +74,77 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [cargandoClubes, setCargandoClubes] = useState(false)
   const [togglingClubId, setTogglingClubId] = useState<string | null>(null)
 
+  // Reseñas por club (solo cuando se abre desde un club con clubId)
+  const [resenas, setResenas] = useState<ResenaItem[]>([])
+  const [cargandoResenas, setCargandoResenas] = useState(false)
+  const [miPuntuacion, setMiPuntuacion] = useState<number>(5)
+  const [miComentario, setMiComentario] = useState<string>('')
+  const [editandoResena, setEditandoResena] = useState(false)
+  const [guardandoResena, setGuardandoResena] = useState(false)
+
+  const cargarResenasDelClub = useCallback(
+    async (isbn: string, clubId: string) => {
+      setCargandoResenas(true)
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+
+      const { data: resenasData } = await supabase
+        .from('resenas_libro')
+        .select('id, usuario_id, puntuacion, comentario, creado_en')
+        .eq('isbn', isbn)
+        .eq('club_id', clubId)
+        .order('creado_en', { ascending: false })
+
+      if (!resenasData || resenasData.length === 0) {
+        setResenas([])
+        setMiPuntuacion(5)
+        setMiComentario('')
+        setEditandoResena(true)
+        setCargandoResenas(false)
+        return
+      }
+
+      const userIds = Array.from(new Set(resenasData.map((r) => r.usuario_id)))
+      const { data: perfilesData } = await supabase
+        .from('perfiles')
+        .select('id, nombre, nombre_usuario')
+        .in('id', userIds)
+
+      const formateadas: ResenaItem[] = resenasData.map((r) => {
+        const perfil = perfilesData?.find((p) => p.id === r.usuario_id)
+        const esMia = user?.id === r.usuario_id
+        return {
+          id: r.id,
+          usuario_id: r.usuario_id,
+          autor_nombre: esMia
+            ? 'Tú'
+            : perfil?.nombre || perfil?.nombre_usuario || `Lector #${r.usuario_id.slice(0, 4)}`,
+          puntuacion: r.puntuacion,
+          comentario: r.comentario,
+          creado_en: r.creado_en,
+          es_mia: esMia,
+        }
+      })
+
+      setResenas(formateadas)
+
+      const mia = formateadas.find((r) => r.es_mia)
+      if (mia) {
+        setMiPuntuacion(mia.puntuacion)
+        setMiComentario(mia.comentario)
+        setEditandoResena(false)
+      } else {
+        setMiPuntuacion(5)
+        setMiComentario('')
+        setEditandoResena(true)
+      }
+
+      setCargandoResenas(false)
+    },
+    [supabase]
+  )
+
   useEffect(() => {
     if (!libro) return
     setEstado(libro.estado)
@@ -68,7 +153,14 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setPremios(libro.premios || '')
     setEditando(false)
 
-    // 1. Si el libro es propio, cargar los clubes del usuario y en cuáles está compartido este ejemplar
+    // 1. Cargar reseñas si viene desde un club
+    if (libro.clubId) {
+      cargarResenasDelClub(libro.isbn, libro.clubId)
+    } else {
+      setResenas([])
+    }
+
+    // 2. Si el libro es propio, cargar los clubes del usuario y visibilidad
     if (libro.esPropio) {
       const cargarVisibilidadClubes = async () => {
         setCargandoClubes(true)
@@ -107,7 +199,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       setClubesCompartidos([])
     }
 
-    // 2. Autorelleno desde Google Books para ejemplares sin sinopsis o con género sin normalizar
+    // 3. Autorelleno desde Google Books para ejemplares sin sinopsis o con género sin normalizar
     const faltaGeneroLimpio =
       !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
     if (!libro.sinopsis || faltaGeneroLimpio) {
@@ -154,9 +246,56 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       }
       enriquecerCatalogo()
     }
-  }, [libro, supabase, onActualizado])
+  }, [libro, supabase, onActualizado, cargarResenasDelClub])
 
   if (!libro) return null
+
+  const guardarResena = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!libro.clubId || !miComentario.trim() || guardandoResena) return
+    setGuardandoResena(true)
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      setGuardandoResena(false)
+      return
+    }
+
+    const { error } = await supabase.from('resenas_libro').upsert(
+      {
+        isbn: libro.isbn,
+        club_id: libro.clubId,
+        usuario_id: user.id,
+        puntuacion: miPuntuacion,
+        comentario: miComentario.trim(),
+      },
+      { onConflict: 'isbn,club_id,usuario_id' }
+    )
+
+    setGuardandoResena(false)
+    if (error) {
+      alert(`No se pudo publicar la reseña: ${error.message}`)
+    } else {
+      await cargarResenasDelClub(libro.isbn, libro.clubId)
+    }
+  }
+
+  const eliminarMiResena = async (resenaId: string) => {
+    if (!libro.clubId || guardandoResena) return
+    setGuardandoResena(true)
+
+    const { error } = await supabase.from('resenas_libro').delete().eq('id', resenaId)
+    setGuardandoResena(false)
+
+    if (error) {
+      alert(`No se pudo eliminar la reseña: ${error.message}`)
+    } else {
+      await cargarResenasDelClub(libro.isbn, libro.clubId)
+    }
+  }
 
   const alternarClub = async (clubId: string) => {
     if (!libro.esPropio || togglingClubId) return
@@ -165,7 +304,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     const yaCompartido = clubesCompartidos.includes(clubId)
 
     if (yaCompartido) {
-      // Quitar de este club
       setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
       const { error } = await supabase
         .from('ejemplares_club')
@@ -180,7 +318,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         onActualizado()
       }
     } else {
-      // Compartir en este club
       setClubesCompartidos((prev) => [...prev, clubId])
       const { error } = await supabase.from('ejemplares_club').insert({
         ejemplar_id: libro.ejemplarId,
@@ -255,6 +392,11 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       onClose()
     }
   }
+
+  const mediaEstrellas =
+    resenas.length > 0
+      ? (resenas.reduce((acc, r) => acc + r.puntuacion, 0) / resenas.length).toFixed(1)
+      : null
 
   return (
     <div
@@ -433,6 +575,148 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 <p className="text-xs text-stone-400 italic">
                   No hay sinopsis oficial disponible para este ISBN.
                 </p>
+              )}
+            </div>
+          )}
+
+          {/* Reseñas de los miembros del club (cuando se abre desde un club) */}
+          {libro.clubId && !editando && (
+            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>
+                    Reseñas en {libro.clubNombre || 'el club'}
+                  </span>
+                </h3>
+                {mediaEstrellas && (
+                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full">
+                    <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                    {mediaEstrellas} ({resenas.length})
+                  </span>
+                )}
+              </div>
+
+              {/* Formulario para publicar o editar mi reseña */}
+              {editandoResena ? (
+                <form
+                  onSubmit={guardarResena}
+                  className="bg-white p-3 rounded-xl border border-stone-200 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-stone-700">
+                      Tu valoración:
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((estrella) => (
+                        <button
+                          key={estrella}
+                          type="button"
+                          onClick={() => setMiPuntuacion(estrella)}
+                          className="p-0.5 cursor-pointer"
+                        >
+                          <Star
+                            className={`w-4 h-4 transition ${
+                              estrella <= miPuntuacion
+                                ? 'fill-amber-400 text-amber-400'
+                                : 'text-stone-300'
+                            }`}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <textarea
+                    rows={2}
+                    maxLength={600}
+                    value={miComentario}
+                    onChange={(e) => setMiComentario(e.target.value)}
+                    placeholder="¿Qué te pareció este libro? Comparte tu opinión con el club..."
+                    className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+                    required
+                  />
+
+                  <div className="flex justify-end gap-2">
+                    {resenas.some((r) => r.es_mia) && (
+                      <button
+                        type="button"
+                        onClick={() => setEditandoResena(false)}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-stone-500 hover:bg-stone-100 cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={guardandoResena || !miComentario.trim()}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      {guardandoResena ? 'Publicando...' : 'Publicar reseña'}
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+
+              {/* Listado de reseñas del club */}
+              {cargandoResenas ? (
+                <p className="text-xs text-stone-400 italic">Cargando reseñas...</p>
+              ) : resenas.length === 0 ? (
+                <p className="text-[11px] text-stone-400">
+                  Nadie del club ha reseñado este libro todavía. ¡Sé el primero!
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  {resenas.map((r) => (
+                    <div
+                      key={r.id}
+                      className="bg-white p-3 rounded-xl border border-stone-200/80 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-stone-800">
+                            {r.autor_nombre}
+                          </span>
+                          <div className="flex items-center">
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <Star
+                                key={n}
+                                className={`w-3 h-3 ${
+                                  n <= r.puntuacion
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-stone-200'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        {r.es_mia && !editandoResena && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditandoResena(true)}
+                              className="text-[11px] text-stone-500 hover:text-stone-800 px-1.5 py-0.5 rounded hover:bg-stone-100 cursor-pointer"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => eliminarMiResena(r.id)}
+                              className="text-[11px] text-red-500 hover:text-red-700 px-1.5 py-0.5 rounded hover:bg-red-50 cursor-pointer"
+                            >
+                              Borrar
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-stone-700 leading-relaxed whitespace-pre-line">
+                        {r.comentario}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}
