@@ -1,372 +1,351 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
-import { extraerPremios, GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
-import { Award, BookOpen, Check, Pencil, RefreshCw, Tag, Trash2, User, X } from 'lucide-react'
+import LibroModal, { LibroDetalle } from '@/components/LibroModal'
+import {
+  Award,
+  BookOpen,
+  Check,
+  Copy,
+  KeyRound,
+  Plus,
+  Send,
+  Tag,
+  Users,
+} from 'lucide-react'
 
-export interface LibroDetalle {
-  ejemplarId: string
-  estado: string
-  propietarioNombre: string
-  esPropio: boolean
+interface Club {
+  id: string
+  nombre: string
+  codigo_invitacion: string
+  creador_id: string
+}
+
+interface EjemplarClub {
+  id: string
   isbn: string
-  titulo: string
-  autor: string
-  portada_url: string
-  genero?: string | null
-  sinopsis?: string | null
-  premios?: string | null
+  estado: string
+  propietario_id: string
+  propietario_nombre: string
+  libros_catalogo: {
+    isbn: string
+    titulo: string
+    autor: string
+    portada_url: string
+    genero?: string | null
+    sinopsis?: string | null
+    premios?: string | null
+  }
 }
 
-interface LibroModalProps {
-  libro: LibroDetalle | null
-  onClose: () => void
-  onActualizado: () => void
+interface ClubesTabProps {
+  userId: string
+  onSolicitado: () => void
 }
 
-export default function LibroModal({ libro, onClose, onActualizado }: LibroModalProps) {
+export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const supabase = createClient()
-  const [estado, setEstado] = useState(libro?.estado || 'disponible')
-  const [sinopsis, setSinopsis] = useState(libro?.sinopsis || '')
-  const [genero, setGenero] = useState(libro?.genero || 'Otros')
-  const [premios, setPremios] = useState(libro?.premios || '')
-  const [editando, setEditando] = useState(false)
-  const [cargandoExtra, setCargandoExtra] = useState(false)
+  const [clubes, setClubes] = useState<Club[]>([])
+  const [clubActivo, setClubActivo] = useState<Club | null>(null)
+  const [librosClub, setLibrosClub] = useState<EjemplarClub[]>([])
+  const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
+  const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
+
+  const [cargandoClubes, setCargandoClubes] = useState(true)
+  const [cargandoLibros, setCargandoLibros] = useState(false)
+
+  // Formularios crear / unirse
+  const [modoFormulario, setModoFormulario] = useState<'ninguno' | 'crear' | 'unirse'>('ninguno')
+  const [nombreNuevoClub, setNombreNuevoClub] = useState('')
+  const [codigoUnirse, setCodigoUnirse] = useState('')
   const [procesando, setProcesando] = useState(false)
+  const [copiado, setCopiado] = useState(false)
+  const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
+
+  const cargarMisClubes = useCallback(async () => {
+    setCargandoClubes(true)
+    const { data: membresias } = await supabase
+      .from('club_miembros')
+      .select('club_id')
+      .eq('usuario_id', userId)
+
+    if (membresias && membresias.length > 0) {
+      const clubIds = membresias.map((m) => m.club_id)
+      const { data: clubesData } = await supabase
+        .from('clubes')
+        .select('id, nombre, codigo_invitacion, creador_id')
+        .in('id', clubIds)
+
+      if (clubesData && clubesData.length > 0) {
+        setClubes(clubesData)
+        setClubActivo((prev) =>
+          prev && clubesData.some((c) => c.id === prev.id) ? prev : clubesData[0]
+        )
+      } else {
+        setClubes([])
+        setClubActivo(null)
+      }
+    } else {
+      setClubes([])
+      setClubActivo(null)
+    }
+    setCargandoClubes(false)
+  }, [supabase, userId])
+
+  const cargarLibrosDelClub = useCallback(
+    async (clubId: string) => {
+      setCargandoLibros(true)
+      setGeneroFiltro('Todos')
+
+      // 1. Obtener miembros del club
+      const { data: miembros } = await supabase
+        .from('club_miembros')
+        .select('usuario_id')
+        .eq('club_id', clubId)
+
+      if (!miembros || miembros.length === 0) {
+        setLibrosClub([])
+        setCargandoLibros(false)
+        return
+      }
+
+      const memberIds = miembros.map((m) => m.usuario_id)
+
+      // 2. Intentar obtener nombres desde perfiles (si existe la tabla)
+      const { data: perfilesData } = await supabase
+        .from('perfiles')
+        .select('id, nombre')
+        .in('id', memberIds)
+
+      // 3. Obtener ejemplares de todos los miembros del club
+      const { data: ejemplaresData } = await supabase
+        .from('ejemplares')
+        .select('id, isbn, estado, propietario_id')
+        .in('propietario_id', memberIds)
+
+      if (!ejemplaresData || ejemplaresData.length === 0) {
+        setLibrosClub([])
+        setCargandoLibros(false)
+        return
+      }
+
+      // 4. Obtener metadatos enriquecidos del catálogo (incluyendo genero, sinopsis y premios)
+      const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
+      const { data: catalogoData } = await supabase
+        .from('libros_catalogo')
+        .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
+        .in('isbn', isbns)
+
+      const combinados: EjemplarClub[] = ejemplaresData.map((ej) => {
+        const perfil = perfilesData?.find((p) => p.id === ej.propietario_id)
+        const esMio = ej.propietario_id === userId
+
+        return {
+          id: ej.id,
+          isbn: ej.isbn,
+          estado: ej.estado,
+          propietario_id: ej.propietario_id,
+          propietario_nombre: esMio
+            ? 'Tú'
+            : perfil?.nombre || `Miembro #${ej.propietario_id.slice(0, 4)}`,
+          libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
+            isbn: ej.isbn,
+            titulo: `ISBN: ${ej.isbn}`,
+            autor: 'Sin datos en catálogo',
+            portada_url: '',
+            genero: 'Otros',
+            sinopsis: null,
+            premios: null,
+          },
+        }
+      })
+
+      setLibrosClub(combinados)
+      setCargandoLibros(false)
+    },
+    [supabase, userId]
+  )
 
   useEffect(() => {
-    if (!libro) return
-    setEstado(libro.estado)
-    setSinopsis(libro.sinopsis || '')
-    setGenero(libro.genero || 'Otros')
-    setPremios(libro.premios || '')
-    setEditando(false)
+    cargarMisClubes()
+  }, [cargarMisClubes])
 
-    // Autorelleno desde Google Books para ejemplares escaneados antes de añadir sinopsis/género/premios
-    const faltaGeneroLimpio = !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
-    if (!libro.sinopsis || faltaGeneroLimpio) {
-      const enriquecerCatalogo = async () => {
-        setCargandoExtra(true)
-        try {
-          const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${libro.isbn}`)
-          const data = await res.json()
-          const info = data.items?.[0]?.volumeInfo
-          if (info) {
-            const nuevaSinopsis = libro.sinopsis || info.description || ''
-            const nuevoGenero = faltaGeneroLimpio
-              ? normalizarGenero(info.categories)
-              : (libro.genero as string)
-            const nuevosPremios =
-              libro.premios || extraerPremios(info.categories, info.description) || ''
-
-            if (
-              nuevaSinopsis !== (libro.sinopsis || '') ||
-              nuevoGenero !== (libro.genero || 'Otros') ||
-              nuevosPremios !== (libro.premios || '')
-            ) {
-              setSinopsis(nuevaSinopsis)
-              setGenero(nuevoGenero)
-              setPremios(nuevosPremios)
-              await supabase
-                .from('libros_catalogo')
-                .update({
-                  sinopsis: nuevaSinopsis || null,
-                  genero: nuevoGenero || 'Otros',
-                  premios: nuevosPremios || null,
-                })
-                .eq('isbn', libro.isbn)
-              onActualizado()
-            }
-          }
-        } catch {
-          // Ignorar fallo de red secundario
-        } finally {
-          setCargandoExtra(false)
-        }
-      }
-      enriquecerCatalogo()
+  useEffect(() => {
+    if (clubActivo) {
+      cargarLibrosDelClub(clubActivo.id)
     }
-  }, [libro, supabase, onActualizado])
+  }, [clubActivo, cargarLibrosDelClub])
 
-  if (!libro) return null
-
-  const guardarMetadatos = async () => {
-    if (!libro.esPropio || procesando) return
+  const crearClub = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!nombreNuevoClub.trim() || procesando) return
     setProcesando(true)
 
-    const { error } = await supabase
-      .from('libros_catalogo')
-      .update({
-        genero: genero || 'Otros',
-        premios: premios.trim() || null,
-        sinopsis: sinopsis.trim() || null,
+    const codigo = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const { data: nuevoClub, error } = await supabase
+      .from('clubes')
+      .insert({
+        nombre: nombreNuevoClub.trim(),
+        codigo_invitacion: codigo,
+        creador_id: userId,
       })
-      .eq('isbn', libro.isbn)
+      .select()
+      .single()
 
+    if (error || !nuevoClub) {
+      alert(`Error al crear el club: ${error?.message || 'Desconocido'}`)
+      setProcesando(false)
+      return
+    }
+
+    await supabase.from('club_miembros').insert({
+      club_id: nuevoClub.id,
+      usuario_id: userId,
+    })
+
+    setNombreNuevoClub('')
+    setModoFormulario('ninguno')
     setProcesando(false)
+    await cargarMisClubes()
+    setClubActivo(nuevoClub)
+  }
+
+  const unirseAClub = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const cleanCode = codigoUnirse.trim().toUpperCase()
+    if (!cleanCode || procesando) return
+    setProcesando(true)
+
+    const { data: clubEncontrado, error } = await supabase
+      .from('clubes')
+      .select('id, nombre, codigo_invitacion, creador_id')
+      .eq('codigo_invitacion', cleanCode)
+      .maybeSingle()
+
+    if (error || !clubEncontrado) {
+      alert('No existe ningún club con ese código de invitación.')
+      setProcesando(false)
+      return
+    }
+
+    const { error: joinError } = await supabase.from('club_miembros').insert({
+      club_id: clubEncontrado.id,
+      usuario_id: userId,
+    })
+
+    if (joinError && joinError.code !== '23505') {
+      alert(`No se pudo unir al club: ${joinError.message}`)
+      setProcesando(false)
+      return
+    }
+
+    setCodigoUnirse('')
+    setModoFormulario('ninguno')
+    setProcesando(false)
+    await cargarMisClubes()
+    setClubActivo(clubEncontrado)
+  }
+
+  const solicitarPrestamo = async (ejemplar: EjemplarClub) => {
+    if (ejemplar.propietario_id === userId || ejemplar.estado !== 'disponible' || solicitandoId) {
+      return
+    }
+    setSolicitandoId(ejemplar.id)
+
+    const { error } = await supabase.from('prestamos').insert({
+      ejemplar_id: ejemplar.id,
+      propietario_id: ejemplar.propietario_id,
+      solicitante_id: userId,
+      estado: 'solicitado',
+    })
+
+    setSolicitandoId(null)
     if (error) {
-      alert(`Error al guardar cambios: ${error.message}`)
+      alert(`No se pudo solicitar el préstamo: ${error.message}`)
     } else {
-      setEditando(false)
-      onActualizado()
+      alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
+      onSolicitado()
     }
   }
 
-  const alternarDisponibilidad = async () => {
-    if (!libro.esPropio || estado === 'prestado' || procesando) return
-    const nuevoEstado = estado === 'disponible' ? 'no_disponible' : 'disponible'
-    setProcesando(true)
-    setEstado(nuevoEstado)
-
-    const { error } = await supabase
-      .from('ejemplares')
-      .update({ estado: nuevoEstado })
-      .eq('id', libro.ejemplarId)
-
-    setProcesando(false)
-    if (error) {
-      alert(`Error al actualizar estado: ${error.message}`)
-      setEstado(libro.estado)
-    } else {
-      onActualizado()
-    }
+  const copiarCodigo = () => {
+    if (!clubActivo) return
+    navigator.clipboard.writeText(clubActivo.codigo_invitacion)
+    setCopiado(true)
+    setTimeout(() => setCopiado(false), 2000)
   }
 
-  const eliminarEjemplar = async () => {
-    if (!libro.esPropio || estado === 'prestado' || procesando) return
-    if (!confirm(`¿Eliminar "${libro.titulo}" de tu estantería?`)) return
+  // Géneros disponibles dinámicamente en el club activo
+  const generosDisponibles = [
+    'Todos',
+    ...Array.from(
+      new Set(librosClub.map((l) => l.libros_catalogo?.genero || 'Otros'))
+    ).sort((a, b) => (a === 'Otros' ? 1 : b === 'Otros' ? -1 : a.localeCompare(b))),
+  ]
 
-    setProcesando(true)
-    const { error } = await supabase.from('ejemplares').delete().eq('id', libro.ejemplarId)
-    setProcesando(false)
+  const librosFiltrados =
+    generoFiltro === 'Todos'
+      ? librosClub
+      : librosClub.filter((l) => (l.libros_catalogo?.genero || 'Otros') === generoFiltro)
 
-    if (error) {
-      alert(`No se pudo eliminar: ${error.message}`)
-    } else {
-      onActualizado()
-      onClose()
-    }
+  if (cargandoClubes) {
+    return (
+      <div className="py-12 text-center text-xs text-stone-500">
+        Cargando tus clubes de lectura...
+      </div>
+    )
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto shadow-xl border border-stone-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-white/95 backdrop-blur-xs border-b border-stone-100 px-5 py-3.5 flex items-center justify-between z-10">
-          <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">
-            Ficha del libro
-          </span>
-          <div className="flex items-center gap-1">
-            {libro.esPropio && !editando && (
-              <button
-                type="button"
-                onClick={() => setEditando(true)}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:text-stone-900 hover:bg-stone-100 flex items-center gap-1 cursor-pointer"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                <span>Editar ficha</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+    <div className="space-y-5">
+      {/* Cabecera y botones de acción */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-bold text-stone-900">Mis Clubes</h1>
+          <p className="text-xs text-stone-500">
+            Comparte estantería y pide libros en tus grupos privados
+          </p>
         </div>
-
-        <div className="p-5 space-y-5">
-          <div className="flex gap-4">
-            <div className="w-24 sm:w-28 aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-xs">
-              {libro.portada_url ? (
-                <img
-                  src={libro.portada_url}
-                  alt={libro.titulo}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-stone-400 text-xs p-2 text-center">
-                  <BookOpen className="w-6 h-6" />
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 min-w-0 space-y-2">
-              <h2 className="text-base sm:text-lg font-bold text-stone-900 leading-snug">
-                {libro.titulo}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-600 font-medium">{libro.autor}</p>
-
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                <span
-                  className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
-                    estado === 'disponible'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : estado === 'prestado'
-                      ? 'bg-blue-100 text-blue-800'
-                      : 'bg-amber-100 text-amber-800'
-                  }`}
-                >
-                  {estado === 'disponible'
-                    ? 'Disponible'
-                    : estado === 'prestado'
-                    ? 'Prestado'
-                    : 'No disponible'}
-                </span>
-
-                {genero && (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-700">
-                    <Tag className="w-3 h-3" />
-                    {genero}
-                  </span>
-                )}
-              </div>
-
-              {premios && !editando && (
-                <div className="pt-0.5">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200/80">
-                    <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>{premios}</span>
-                  </span>
-                </div>
-              )}
-
-              <div className="pt-1 flex items-center gap-1.5 text-xs text-stone-500">
-                <User className="w-3.5 h-3.5 text-stone-400" />
-                <span>
-                  Propietario: <strong className="text-stone-700">{libro.propietarioNombre}</strong>
-                </span>
-              </div>
-              <p className="text-[11px] text-stone-400">ISBN: {libro.isbn}</p>
-            </div>
-          </div>
-
-          {editando ? (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">Género</label>
-                <select
-                  value={genero}
-                  onChange={(e) => setGenero(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                >
-                  {GENEROS_ESTANDAR.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Premios literarios (opcional)
-                </label>
-                <input
-                  type="text"
-                  value={premios}
-                  onChange={(e) => setPremios(e.target.value)}
-                  placeholder="Ej. Premio Planeta, Premio Pulitzer..."
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">Sinopsis</label>
-                <textarea
-                  rows={4}
-                  value={sinopsis}
-                  onChange={(e) => setSinopsis(e.target.value)}
-                  placeholder="Escribe o pega aquí la sinopsis del libro..."
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setEditando(false)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:bg-stone-200 cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={guardarMetadatos}
-                  disabled={procesando}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white flex items-center gap-1 cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Guardar ficha</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2">
-                Sinopsis
-              </h3>
-              {cargandoExtra ? (
-                <p className="text-xs text-stone-400 italic">Buscando sinopsis oficial...</p>
-              ) : sinopsis ? (
-                <p className="text-xs sm:text-sm text-stone-700 leading-relaxed whitespace-pre-line">
-                  {sinopsis}
-                </p>
-              ) : (
-                <p className="text-xs text-stone-400 italic">
-                  No hay sinopsis oficial disponible para este ISBN.
-                </p>
-              )}
-            </div>
-          )}
-
-          {libro.esPropio && !editando && (
-            <div className="pt-1 flex flex-col sm:flex-row gap-2.5">
-              <button
-                type="button"
-                onClick={alternarDisponibilidad}
-                disabled={estado === 'prestado' || procesando}
-                className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
-                  estado === 'disponible'
-                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                    : estado === 'prestado'
-                    ? 'bg-stone-200 text-stone-500 cursor-not-allowed'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                }`}
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>
-                  {estado === 'disponible'
-                    ? 'Marcar como No disponible'
-                    : estado === 'prestado'
-                    ? 'Actualmente prestado'
-                    : 'Marcar como Disponible'}
-                </span>
-              </button>
-
-              {estado !== 'prestado' && (
-                <button
-                  type="button"
-                  onClick={eliminarEjemplar}
-                  disabled={procesando}
-                  className="py-2.5 px-4 rounded-xl text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 flex items-center justify-center gap-1.5 transition cursor-pointer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>Eliminar</span>
-                </button>
-              )}
-            </div>
-          )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setModoFormulario(modoFormulario === 'unirse' ? 'ninguno' : 'unirse')}
+            className="py-2 px-3 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-medium rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Unirme</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setModoFormulario(modoFormulario === 'crear' ? 'ninguno' : 'crear')}
+            className="py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white font-medium rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Crear club</span>
+          </button>
         </div>
       </div>
-    </div>
-  )
-}
+
+      {/* Formulario Crear Club */}
+      {modoFormulario === 'crear' && (
+        <form
+          onSubmit={crearClub}
+          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-xs space-y-3"
+        >
+          <label className="block text-xs font-semibold text-stone-700">
+            Nombre del nuevo club de lectura
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={nombreNuevoClub}
+              onChange={(e) => setNombreNuevoClub(e.target.value)}
+              placeholder="Ej. Lectores Donostia"
+              className="flex-1 px-3 py-2 border border-stone-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
+              required
+            />
+            <button
+              type="submit"
+              disabled={procesando}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold cursor-pointer
