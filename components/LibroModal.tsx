@@ -2,22 +2,20 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
-import { extraerPremios, GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
+import { comprimirImagen } from '@/utils/comprimirImagen'
+import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import {
   Award,
   BookOpen,
+  Camera,
   Check,
-  Eye,
-  EyeOff,
   Loader2,
   MapPin,
   MessageSquare,
-  Pencil,
-  RefreshCw,
+  Send,
   Star,
   Tag,
   Trash2,
-  User,
   Users,
   X,
 } from 'lucide-react'
@@ -38,7 +36,7 @@ export interface LibroDetalle {
   clubNombre?: string | null
 }
 
-interface ClubOpcion {
+interface ClubItem {
   id: string
   nombre: string
 }
@@ -46,11 +44,10 @@ interface ClubOpcion {
 interface ResenaItem {
   id: string
   usuario_id: string
-  autor_nombre: string
+  usuario_nombre: string
   puntuacion: number
-  comentario: string
+  comentario: string | null
   creado_en: string
-  es_mia: boolean
 }
 
 interface LibroModalProps {
@@ -59,41 +56,57 @@ interface LibroModalProps {
   onActualizado: () => void
 }
 
+function extraerPremios(categories?: string[], description?: string): string | null {
+  const texto = `${(categories || []).join(' ')} ${description || ''}`
+  const patrones = [
+    /Premio\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñA-ZÁÉÍÓÚÑ\s]{2,30}/,
+    /Pulitzer\s*(?:Prize)?/i,
+    /Booker\s*(?:Prize)?/i,
+    /Premio\s+Planeta/i,
+    /Premio\s+Nadal/i,
+    /Premio\s+Cervantes/i,
+    /Premio\s+Alfaguara/i,
+    /Premio\s+Herralde/i,
+    /Premio\s+Nacional\s+de\s+Narrativa/i,
+  ]
+  for (const regex of patrones) {
+    const match = texto.match(regex)
+    if (match) return match[0].trim()
+  }
+  return null
+}
+
 export default function LibroModal({ libro, onClose, onActualizado }: LibroModalProps) {
   const supabase = createClient()
+
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [estado, setEstado] = useState(libro?.estado || 'disponible')
-  const [sinopsis, setSinopsis] = useState(libro?.sinopsis || '')
   const [genero, setGenero] = useState(libro?.genero || 'Otros')
+  const [sinopsis, setSinopsis] = useState(libro?.sinopsis || '')
   const [premios, setPremios] = useState(libro?.premios || '')
-  const [editando, setEditando] = useState(false)
+  const [portadaActual, setPortadaActual] = useState(libro?.portada_url || '')
+  const [subiendoPortada, setSubiendoPortada] = useState(false)
   const [cargandoExtra, setCargandoExtra] = useState(false)
-  const [procesando, setProcesando] = useState(false)
 
-  // Gestión de visibilidad en clubes y zona local (solo si esPropio)
-  const [misClubes, setMisClubes] = useState<ClubOpcion[]>([])
+  const [misClubes, setMisClubes] = useState<ClubItem[]>([])
   const [clubesCompartidos, setClubesCompartidos] = useState<string[]>([])
-  const [cargandoClubes, setCargandoClubes] = useState(false)
-  const [togglingClubId, setTogglingClubId] = useState<string | null>(null)
-
   const [visibleLocal, setVisibleLocal] = useState(false)
-  const [perfilLocalListo, setPerfilLocalListo] = useState(false)
   const [codigoPostalUsuario, setCodigoPostalUsuario] = useState<string | null>(null)
-  const [togglingLocal, setTogglingLocal] = useState(false)
+  const [guardandoVisibilidad, setGuardandoVisibilidad] = useState(false)
 
-  // Reseñas por club (solo cuando se abre desde un club con clubId)
   const [resenas, setResenas] = useState<ResenaItem[]>([])
   const [cargandoResenas, setCargandoResenas] = useState(false)
   const [miPuntuacion, setMiPuntuacion] = useState<number>(5)
-  const [miComentario, setMiComentario] = useState<string>('')
-  const [editandoResena, setEditandoResena] = useState(false)
+  const [miComentario, setMiComentario] = useState('')
   const [guardandoResena, setGuardandoResena] = useState(false)
 
-  const cargarResenasDelClub = useCallback(
-    async (isbn: string, clubId: string) => {
+  const cargarResenas = useCallback(
+    async (isbn: string, clubId?: string | null) => {
+      if (!clubId) {
+        setResenas([])
+        return
+      }
       setCargandoResenas(true)
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
 
       const { data: resenasData } = await supabase
         .from('resenas_libro')
@@ -104,9 +117,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
       if (!resenasData || resenasData.length === 0) {
         setResenas([])
-        setMiPuntuacion(5)
-        setMiComentario('')
-        setEditandoResena(true)
         setCargandoResenas(false)
         return
       }
@@ -117,35 +127,20 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         .select('id, nombre, nombre_usuario')
         .in('id', userIds)
 
-      const formateadas: ResenaItem[] = resenasData.map((r) => {
+      const combinadas: ResenaItem[] = resenasData.map((r) => {
         const perfil = perfilesData?.find((p) => p.id === r.usuario_id)
-        const esMia = user?.id === r.usuario_id
         return {
           id: r.id,
           usuario_id: r.usuario_id,
-          autor_nombre: esMia
-            ? 'Tú'
-            : perfil?.nombre || perfil?.nombre_usuario || `Lector #${r.usuario_id.slice(0, 4)}`,
+          usuario_nombre:
+            perfil?.nombre || perfil?.nombre_usuario || `Lector #${r.usuario_id.slice(0, 4)}`,
           puntuacion: r.puntuacion,
           comentario: r.comentario,
           creado_en: r.creado_en,
-          es_mia: esMia,
         }
       })
 
-      setResenas(formateadas)
-
-      const mia = formateadas.find((r) => r.es_mia)
-      if (mia) {
-        setMiPuntuacion(mia.puntuacion)
-        setMiComentario(mia.comentario)
-        setEditandoResena(false)
-      } else {
-        setMiPuntuacion(5)
-        setMiComentario('')
-        setEditandoResena(true)
-      }
-
+      setResenas(combinadas)
       setCargandoResenas(false)
     },
     [supabase]
@@ -154,30 +149,29 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   useEffect(() => {
     if (!libro) return
     setEstado(libro.estado)
-    setSinopsis(libro.sinopsis || '')
     setGenero(libro.genero || 'Otros')
+    setSinopsis(libro.sinopsis || '')
     setPremios(libro.premios || '')
-    setEditando(false)
+    setPortadaActual(libro.portada_url || '')
+    setMiPuntuacion(5)
+    setMiComentario('')
 
-    // 1. Cargar reseñas si viene desde un club
-    if (libro.clubId) {
-      cargarResenasDelClub(libro.isbn, libro.clubId)
-    } else {
-      setResenas([])
-    }
+    const cargarDatosModal = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
 
-    // 2. Si el libro es propio, cargar visibilidad en clubes y visibilidad local por CP
-    if (libro.esPropio) {
-      const cargarVisibilidad = async () => {
-        setCargandoClubes(true)
-        const {
-          data: { user },
-        } = await supabase.auth.getUser()
+      if (user) {
+        setCurrentUserId(user.id)
 
-        if (user) {
-          const [{ data: membresias }, { data: ejemplarInfo }, { data: perfilInfo }] =
+        if (libro.esPropio) {
+          const [{ data: membresias }, { data: compartidos }, { data: ejData }, { data: perfilData }] =
             await Promise.all([
               supabase.from('miembros_club').select('club_id').eq('usuario_id', user.id),
+              supabase
+                .from('ejemplares_club')
+                .select('club_id')
+                .eq('ejemplar_id', libro.ejemplarId),
               supabase
                 .from('ejemplares')
                 .select('visible_local')
@@ -185,44 +179,38 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 .maybeSingle(),
               supabase
                 .from('perfiles')
-                .select('codigo_postal, busqueda_local_activa')
+                .select('codigo_postal')
                 .eq('id', user.id)
                 .maybeSingle(),
             ])
 
-          setVisibleLocal(Boolean(ejemplarInfo?.visible_local))
-          setCodigoPostalUsuario(perfilInfo?.codigo_postal || null)
-          setPerfilLocalListo(
-            Boolean(perfilInfo?.busqueda_local_activa && perfilInfo?.codigo_postal)
-          )
+          setVisibleLocal(Boolean(ejData?.visible_local))
+          setCodigoPostalUsuario(perfilData?.codigo_postal || null)
 
           if (membresias && membresias.length > 0) {
-            const clubIds = membresias.map((m) => m.club_id)
-            const [{ data: clubesData }, { data: compartidosData }] = await Promise.all([
-              supabase.from('clubes').select('id, nombre').in('id', clubIds),
-              supabase
-                .from('ejemplares_club')
-                .select('club_id')
-                .eq('ejemplar_id', libro.ejemplarId),
-            ])
-
+            const ids = membresias.map((m) => m.club_id)
+            const { data: clubesData } = await supabase
+              .from('clubes')
+              .select('id, nombre')
+              .in('id', ids)
             setMisClubes(clubesData || [])
-            setClubesCompartidos(compartidosData?.map((c) => c.club_id) || [])
           } else {
             setMisClubes([])
-            setClubesCompartidos([])
           }
+
+          setClubesCompartidos(compartidos?.map((c) => c.club_id) || [])
         }
-        setCargandoClubes(false)
       }
-      cargarVisibilidad()
-    } else {
-      setMisClubes([])
-      setClubesCompartidos([])
-      setVisibleLocal(false)
+
+      if (libro.clubId) {
+        await cargarResenas(libro.isbn, libro.clubId)
+      } else {
+        setResenas([])
+      }
     }
 
-    // 3. Autorelleno desde Google Books para ejemplares sin portada, sinopsis o con género sin normalizar
+    cargarDatosModal()
+
     const faltaGeneroLimpio =
       !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
     const faltaPortada = !libro.portada_url
@@ -247,7 +235,8 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           const portadaGoogle =
             info?.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
           const nuevaPortada = faltaPortada
-            ? portadaGoogle || `https://covers.openlibrary.org/b/isbn/${libro.isbn}-M.jpg?default=false`
+            ? portadaGoogle ||
+              `https://covers.openlibrary.org/b/isbn/${libro.isbn}-M.jpg?default=false`
             : libro.portada_url
 
           if (
@@ -259,6 +248,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             setSinopsis(nuevaSinopsis)
             setGenero(nuevoGenero)
             setPremios(nuevosPremios)
+            if (nuevaPortada) setPortadaActual(nuevaPortada)
             await supabase
               .from('libros_catalogo')
               .update({
@@ -271,175 +261,170 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             onActualizado()
           }
         } catch {
-          // Ignorar fallo de red secundario
+          // Ignorar fallo secundario
         } finally {
           setCargandoExtra(false)
         }
       }
       enriquecerCatalogo()
     }
-  }, [libro, supabase, onActualizado, cargarResenasDelClub])
+  }, [libro, supabase, cargarResenas, onActualizado])
+
+  useEffect(() => {
+    if (currentUserId && resenas.length > 0) {
+      const propia = resenas.find((r) => r.usuario_id === currentUserId)
+      if (propia) {
+        setMiPuntuacion(propia.puntuacion)
+        setMiComentario(propia.comentario || '')
+      }
+    }
+  }, [currentUserId, resenas])
 
   if (!libro) return null
 
-  const alternarVisibilidadLocal = async () => {
-    if (!libro.esPropio || togglingLocal) return
-    setTogglingLocal(true)
-    const nuevoValor = !visibleLocal
-    setVisibleLocal(nuevoValor)
+  const subirFotoPortada = async (file: File) => {
+    if (subiendoPortada) return
+    setSubiendoPortada(true)
 
+    try {
+      const imagenComprimida = await comprimirImagen(file)
+      const rutaArchivo = `${libro.isbn}_${Date.now()}.jpg`
+
+      const { error: uploadError } = await supabase.storage
+        .from('portadas-libros')
+        .upload(rutaArchivo, imagenComprimida, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        })
+
+      if (uploadError) throw uploadError
+
+      const { data: publicUrlData } = supabase.storage
+        .from('portadas-libros')
+        .getPublicUrl(rutaArchivo)
+
+      const nuevaUrl = publicUrlData.publicUrl
+
+      const { error: dbError } = await supabase
+        .from('libros_catalogo')
+        .update({ portada_url: nuevaUrl })
+        .eq('isbn', libro.isbn)
+
+      if (dbError) throw dbError
+
+      setPortadaActual(nuevaUrl)
+      onActualizado()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      alert(`No se pudo guardar la portada: ${msg}`)
+    } finally {
+      setSubiendoPortada(false)
+    }
+  }
+
+  const cambiarEstado = async (nuevoEstado: string) => {
+    setEstado(nuevoEstado)
     const { error } = await supabase
       .from('ejemplares')
-      .update({ visible_local: nuevoValor })
+      .update({ estado: nuevoEstado })
       .eq('id', libro.ejemplarId)
 
-    setTogglingLocal(false)
-    if (error) {
-      alert(`No se pudo actualizar la visibilidad local: ${error.message}`)
-      setVisibleLocal(!nuevoValor)
-    } else {
-      onActualizado()
-    }
+    if (!error) onActualizado()
   }
 
-  const guardarResena = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!libro.clubId || !miComentario.trim() || guardandoResena) return
-    setGuardandoResena(true)
+  const cambiarGeneroManual = async (nuevoGenero: string) => {
+    setGenero(nuevoGenero)
+    const { error } = await supabase
+      .from('libros_catalogo')
+      .update({ genero: nuevoGenero })
+      .eq('isbn', libro.isbn)
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-
-    if (!user) {
-      setGuardandoResena(false)
-      return
-    }
-
-    const { error } = await supabase.from('resenas_libro').upsert(
-      {
-        isbn: libro.isbn,
-        club_id: libro.clubId,
-        usuario_id: user.id,
-        puntuacion: miPuntuacion,
-        comentario: miComentario.trim(),
-      },
-      { onConflict: 'isbn,club_id,usuario_id' }
-    )
-
-    setGuardandoResena(false)
-    if (error) {
-      alert(`No se pudo publicar la reseña: ${error.message}`)
-    } else {
-      await cargarResenasDelClub(libro.isbn, libro.clubId)
-    }
+    if (!error) onActualizado()
   }
 
-  const eliminarMiResena = async (resenaId: string) => {
-    if (!libro.clubId || guardandoResena) return
-    setGuardandoResena(true)
-
-    const { error } = await supabase.from('resenas_libro').delete().eq('id', resenaId)
-    setGuardandoResena(false)
-
-    if (error) {
-      alert(`No se pudo eliminar la reseña: ${error.message}`)
-    } else {
-      await cargarResenasDelClub(libro.isbn, libro.clubId)
-    }
-  }
-
-  const alternarClub = async (clubId: string) => {
-    if (!libro.esPropio || togglingClubId) return
-    setTogglingClubId(clubId)
-
+  const toggleClub = async (clubId: string) => {
+    if (guardandoVisibilidad) return
+    setGuardandoVisibilidad(true)
     const yaCompartido = clubesCompartidos.includes(clubId)
 
     if (yaCompartido) {
-      setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
       const { error } = await supabase
         .from('ejemplares_club')
         .delete()
         .eq('ejemplar_id', libro.ejemplarId)
         .eq('club_id', clubId)
 
-      if (error) {
-        alert(`No se pudo ocultar del club: ${error.message}`)
-        setClubesCompartidos((prev) => [...prev, clubId])
-      } else {
-        onActualizado()
-      }
-    } else {
-      setClubesCompartidos((prev) => [...prev, clubId])
-      const { error } = await supabase.from('ejemplares_club').insert({
-        ejemplar_id: libro.ejemplarId,
-        club_id: clubId,
-      })
-
-      if (error) {
-        alert(`No se pudo compartir en el club: ${error.message}`)
+      if (!error) {
         setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
-      } else {
+        onActualizado()
+      }
+    } else {
+      const { error } = await supabase
+        .from('ejemplares_club')
+        .insert({ ejemplar_id: libro.ejemplarId, club_id: clubId })
+
+      if (!error) {
+        setClubesCompartidos((prev) => [...prev, clubId])
         onActualizado()
       }
     }
-
-    setTogglingClubId(null)
+    setGuardandoVisibilidad(false)
   }
 
-  const guardarMetadatos = async () => {
-    if (!libro.esPropio || procesando) return
-    setProcesando(true)
-
-    const { error } = await supabase
-      .from('libros_catalogo')
-      .update({
-        genero: genero || 'Otros',
-        premios: premios.trim() || null,
-        sinopsis: sinopsis.trim() || null,
-      })
-      .eq('isbn', libro.isbn)
-
-    setProcesando(false)
-    if (error) {
-      alert(`Error al guardar cambios: ${error.message}`)
-    } else {
-      setEditando(false)
-      onActualizado()
+  const toggleVisibilidadLocal = async () => {
+    if (guardandoVisibilidad) return
+    if (!visibleLocal && !codigoPostalUsuario) {
+      alert(
+        'Para compartir libros en tu barrio primero debes guardar tu código postal en tu perfil (arriba a la derecha).'
+      )
+      return
     }
-  }
 
-  const alternarDisponibilidad = async () => {
-    if (!libro.esPropio || estado === 'prestado' || procesando) return
-    const nuevoEstado = estado === 'disponible' ? 'no_disponible' : 'disponible'
-    setProcesando(true)
-    setEstado(nuevoEstado)
-
+    setGuardandoVisibilidad(true)
+    const nuevoValor = !visibleLocal
     const { error } = await supabase
       .from('ejemplares')
-      .update({ estado: nuevoEstado })
+      .update({ visible_local: nuevoValor })
       .eq('id', libro.ejemplarId)
 
-    setProcesando(false)
-    if (error) {
-      alert(`Error al actualizar estado: ${error.message}`)
-      setEstado(libro.estado)
+    if (!error) {
+      setVisibleLocal(nuevoValor)
+      onActualizado()
     } else {
+      alert(`No se pudo cambiar la visibilidad local: ${error.message}`)
+    }
+    setGuardandoVisibilidad(false)
+  }
+
+  const guardarResena = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!currentUserId || !libro.clubId || guardandoResena) return
+    setGuardandoResena(true)
+
+    const { error } = await supabase.from('resenas_libro').upsert(
+      {
+        isbn: libro.isbn,
+        club_id: libro.clubId,
+        usuario_id: currentUserId,
+        puntuacion: miPuntuacion,
+        comentario: miComentario.trim() || null,
+      },
+      { onConflict: 'isbn,club_id,usuario_id' }
+    )
+
+    setGuardandoResena(false)
+    if (error) {
+      alert(`No se pudo guardar la reseña: ${error.message}`)
+    } else {
+      await cargarResenas(libro.isbn, libro.clubId)
       onActualizado()
     }
   }
 
-  const eliminarEjemplar = async () => {
-    if (!libro.esPropio || estado === 'prestado' || procesando) return
-    if (!confirm(`¿Eliminar "${libro.titulo}" de tu estantería?`)) return
-
-    setProcesando(true)
+  const eliminarLibro = async () => {
+    if (!confirm('¿Seguro que quieres quitar este libro de tu estantería?')) return
     const { error } = await supabase.from('ejemplares').delete().eq('id', libro.ejemplarId)
-    setProcesando(false)
-
-    if (error) {
-      alert(`No se pudo eliminar: ${error.message}`)
-    } else {
+    if (!error) {
       onActualizado()
       onClose()
     }
@@ -450,318 +435,234 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       ? (resenas.reduce((acc, r) => acc + r.puntuacion, 0) / resenas.length).toFixed(1)
       : null
 
+  const puedeEditarPortada = libro.esPropio || !portadaActual
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[90vh] overflow-y-auto shadow-xl border border-stone-200"
+        className="bg-white w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl max-h-[90vh] overflow-y-auto shadow-xl border border-stone-200"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-white/95 backdrop-blur-xs border-b border-stone-100 px-5 py-3.5 flex items-center justify-between z-10">
-          <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">
-            Ficha del libro
+          <span className="text-xs font-semibold text-stone-400 uppercase tracking-wider">
+            Ficha del ejemplar
           </span>
-          <div className="flex items-center gap-1">
-            {libro.esPropio && !editando && (
-              <button
-                type="button"
-                onClick={() => setEditando(true)}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:text-stone-900 hover:bg-stone-100 flex items-center gap-1 cursor-pointer"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                <span>Editar ficha</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-stone-400 hover:text-stone-700 rounded-full hover:bg-stone-100 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Cabecera portada + metadatos */}
           <div className="flex gap-4">
-            <div className="w-24 sm:w-28 aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-xs">
-              {libro.portada_url ? (
+            <div className="w-24 aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-xs relative group">
+              {portadaActual ? (
                 <img
-                  src={libro.portada_url}
+                  src={portadaActual}
                   alt={libro.titulo}
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-stone-400 text-xs p-2 text-center">
-                  <BookOpen className="w-6 h-6" />
+                <div className="w-full h-full flex flex-col items-center justify-center text-stone-400 text-[11px] p-2 text-center gap-1">
+                  <BookOpen className="w-5 h-5 text-stone-300" />
+                  <span>Sin portada</span>
                 </div>
+              )}
+
+              {puedeEditarPortada && (
+                <label
+                  title="Hacer foto o subir portada del libro"
+                  className="absolute inset-x-1.5 bottom-1.5 py-1.5 px-2 bg-stone-900/85 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 shadow-sm cursor-pointer transition"
+                >
+                  {subiendoPortada ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Camera className="w-3.5 h-3.5" />
+                  )}
+                  <span>{subiendoPortada ? 'Subiendo...' : 'Foto'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    disabled={subiendoPortada}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) subirFotoPortada(file)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
               )}
             </div>
 
-            <div className="flex-1 min-w-0 space-y-2">
-              <h2 className="text-base sm:text-lg font-bold text-stone-900 leading-snug">
-                {libro.titulo}
-              </h2>
-              <p className="text-xs sm:text-sm text-stone-600 font-medium">{libro.autor}</p>
+            <div className="space-y-1.5 flex-1">
+              <h2 className="font-bold text-stone-900 text-base leading-snug">{libro.titulo}</h2>
+              <p className="text-sm text-stone-600 font-medium">{libro.autor}</p>
 
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                <span
-                  className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
-                    estado === 'disponible'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : estado === 'prestado'
-                      ? 'bg-blue-100 text-blue-800'
-                      : 'bg-amber-100 text-amber-800'
-                  }`}
-                >
-                  {estado === 'disponible'
-                    ? 'Disponible'
-                    : estado === 'prestado'
-                    ? 'Prestado'
-                    : 'No disponible'}
-                </span>
-
-                {genero && (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-700">
-                    <Tag className="w-3 h-3" />
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                {libro.esPropio ? (
+                  <div className="inline-flex items-center gap-1 bg-stone-100 border border-stone-200 rounded-full px-2.5 py-0.5">
+                    <Tag className="w-3 h-3 text-stone-500" />
+                    <select
+                      value={genero}
+                      onChange={(e) => cambiarGeneroManual(e.target.value)}
+                      aria-label="Cambiar género del libro"
+                      className="text-[11px] font-medium text-stone-700 bg-transparent focus:outline-none cursor-pointer"
+                    >
+                      {GENEROS_ESTANDAR.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] bg-stone-100 text-stone-700 px-2.5 py-0.5 rounded-full font-medium">
+                    <Tag className="w-3 h-3 text-stone-500" />
                     {genero}
                   </span>
                 )}
+
+                <span className="text-[11px] text-stone-400">ISBN: {libro.isbn}</span>
               </div>
 
-              {premios && !editando && (
-                <div className="pt-0.5">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200/80">
-                    <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>{premios}</span>
+              {mediaEstrellas && (
+                <div className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                  <span>{mediaEstrellas} / 5</span>
+                  <span className="text-amber-700/80 font-normal">
+                    ({resenas.length} {resenas.length === 1 ? 'opinión' : 'opiniones'})
                   </span>
                 </div>
               )}
 
-              <div className="pt-1 flex items-center gap-1.5 text-xs text-stone-500">
-                <User className="w-3.5 h-3.5 text-stone-400" />
-                <span>
-                  Propietario: <strong className="text-stone-700">{libro.propietarioNombre}</strong>
-                </span>
-              </div>
-              <p className="text-[11px] text-stone-400">ISBN: {libro.isbn}</p>
+              {premios && (
+                <div className="mt-2 inline-flex items-center gap-1.5 text-xs bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-1 rounded-lg font-medium">
+                  <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>{premios}</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Formulario edición o Sinopsis */}
-          {editando ? (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">Género</label>
-                <select
-                  value={genero}
-                  onChange={(e) => setGenero(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                >
-                  {GENEROS_ESTANDAR.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100">
+            <h3 className="text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+              <BookOpen className="w-3.5 h-3.5 text-emerald-700" />
+              Sinopsis
+            </h3>
+            {cargandoExtra ? (
+              <p className="text-xs text-stone-400 italic">Buscando datos del libro...</p>
+            ) : sinopsis ? (
+              <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">
+                {sinopsis}
+              </p>
+            ) : (
+              <p className="text-xs text-stone-400 italic">
+                No hay sinopsis disponible para esta edición.
+              </p>
+            )}
+          </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Premios literarios (opcional)
-                </label>
-                <input
-                  type="text"
-                  value={premios}
-                  onChange={(e) => setPremios(e.target.value)}
-                  placeholder="Ej. Premio Planeta, Premio Pulitzer..."
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">Sinopsis</label>
-                <textarea
-                  rows={4}
-                  value={sinopsis}
-                  onChange={(e) => setSinopsis(e.target.value)}
-                  placeholder="Escribe o pega aquí la sinopsis del libro..."
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setEditando(false)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:bg-stone-200 cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={guardarMetadatos}
-                  disabled={procesando}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white flex items-center gap-1 cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Guardar ficha</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2">
-                Sinopsis
-              </h3>
-              {cargandoExtra ? (
-                <p className="text-xs text-stone-400 italic">Buscando sinopsis oficial...</p>
-              ) : sinopsis ? (
-                <p className="text-xs sm:text-sm text-stone-700 leading-relaxed whitespace-pre-line">
-                  {sinopsis}
-                </p>
-              ) : (
-                <p className="text-xs text-stone-400 italic">
-                  No hay sinopsis oficial disponible para este ISBN.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Reseñas de los miembros del club (cuando se abre desde un club) */}
-          {libro.clubId && !editando && (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-3.5">
+          {libro.clubId && (
+            <div className="border-t border-stone-100 pt-4 space-y-3.5">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
                   <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>Reseñas en {libro.clubNombre || 'el club'}</span>
+                  <span>Opiniones en {libro.clubNombre || 'el club'}</span>
                 </h3>
                 {mediaEstrellas && (
-                  <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full">
-                    <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                    {mediaEstrellas} ({resenas.length})
-                  </span>
+                  <span className="text-xs font-bold text-stone-700">★ {mediaEstrellas}</span>
                 )}
               </div>
 
-              {editandoResena ? (
-                <form
-                  onSubmit={guardarResena}
-                  className="bg-white p-3 rounded-xl border border-stone-200 space-y-2.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-stone-700">
-                      Tu valoración:
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {[1, 2, 3, 4, 5].map((estrella) => (
-                        <button
-                          key={estrella}
-                          type="button"
-                          onClick={() => setMiPuntuacion(estrella)}
-                          className="p-0.5 cursor-pointer"
-                        >
-                          <Star
-                            className={`w-4 h-4 transition ${
-                              estrella <= miPuntuacion
-                                ? 'fill-amber-400 text-amber-400'
-                                : 'text-stone-300'
-                            }`}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <textarea
-                    rows={2}
-                    maxLength={600}
-                    value={miComentario}
-                    onChange={(e) => setMiComentario(e.target.value)}
-                    placeholder="¿Qué te pareció este libro? Comparte tu opinión con el club..."
-                    className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
-                    required
-                  />
-
-                  <div className="flex justify-end gap-2">
-                    {resenas.some((r) => r.es_mia) && (
+              <form
+                onSubmit={guardarResena}
+                className="bg-stone-50 border border-stone-200 rounded-2xl p-3.5 space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-stone-700">Tu valoración:</span>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((estrella) => (
                       <button
+                        key={estrella}
                         type="button"
-                        onClick={() => setEditandoResena(false)}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-stone-500 hover:bg-stone-100 cursor-pointer"
+                        onClick={() => setMiPuntuacion(estrella)}
+                        className="p-0.5 cursor-pointer transition-transform hover:scale-110"
+                        title={`${estrella} ${estrella === 1 ? 'estrella' : 'estrellas'}`}
                       >
-                        Cancelar
+                        <Star
+                          className={`w-5 h-5 ${
+                            estrella <= miPuntuacion
+                              ? 'fill-amber-400 text-amber-400'
+                              : 'text-stone-300'
+                          }`}
+                        />
                       </button>
-                    )}
-                    <button
-                      type="submit"
-                      disabled={guardandoResena || !miComentario.trim()}
-                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-50"
-                    >
-                      {guardandoResena ? 'Publicando...' : 'Publicar reseña'}
-                    </button>
+                    ))}
                   </div>
-                </form>
-              ) : null}
+                </div>
+
+                <textarea
+                  rows={2}
+                  maxLength={500}
+                  value={miComentario}
+                  onChange={(e) => setMiComentario(e.target.value)}
+                  placeholder="¿Qué te ha parecido este libro? Comparte tu opinión con el club..."
+                  className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600 resize-none"
+                />
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={guardandoResena}
+                    className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="w-3 h-3" />
+                    <span>{guardandoResena ? 'Guardando...' : 'Publicar opinión'}</span>
+                  </button>
+                </div>
+              </form>
 
               {cargandoResenas ? (
-                <p className="text-xs text-stone-400 italic">Cargando reseñas...</p>
+                <p className="text-xs text-stone-400 text-center py-2">Cargando comentarios...</p>
               ) : resenas.length === 0 ? (
-                <p className="text-[11px] text-stone-400">
-                  Nadie del club ha reseñado este libro todavía. ¡Sé el primero!
+                <p className="text-xs text-stone-400 text-center py-2">
+                  Nadie ha reseñado todavía este título en el club. ¡Sé el primero!
                 </p>
               ) : (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   {resenas.map((r) => (
                     <div
                       key={r.id}
-                      className="bg-white p-3 rounded-xl border border-stone-200/80 space-y-1.5"
+                      className="bg-white border border-stone-200/80 rounded-xl p-3 space-y-1"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-stone-800">
-                            {r.autor_nombre}
-                          </span>
-                          <div className="flex items-center">
-                            {[1, 2, 3, 4, 5].map((n) => (
-                              <Star
-                                key={n}
-                                className={`w-3 h-3 ${
-                                  n <= r.puntuacion
-                                    ? 'fill-amber-400 text-amber-400'
-                                    : 'text-stone-200'
-                                }`}
-                              />
-                            ))}
-                          </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-stone-800">
+                          {r.usuario_id === currentUserId ? `${r.usuario_nombre} (Tú)` : r.usuario_nombre}
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <Star
+                              key={n}
+                              className={`w-3 h-3 ${
+                                n <= r.puntuacion
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-stone-200'
+                              }`}
+                            />
+                          ))}
                         </div>
-
-                        {r.es_mia && !editandoResena && (
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => setEditandoResena(true)}
-                              className="text-[11px] text-stone-500 hover:text-stone-800 px-1.5 py-0.5 rounded hover:bg-stone-100 cursor-pointer"
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => eliminarMiResena(r.id)}
-                              className="text-[11px] text-red-500 hover:text-red-700 px-1.5 py-0.5 rounded hover:bg-red-50 cursor-pointer"
-                            >
-                              Borrar
-                            </button>
-                          </div>
-                        )}
                       </div>
-
-                      <p className="text-xs text-stone-700 leading-relaxed whitespace-pre-line">
-                        {r.comentario}
-                      </p>
+                      {r.comentario && (
+                        <p className="text-xs text-stone-600 leading-relaxed">{r.comentario}</p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -769,152 +670,119 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           )}
 
-          {/* Visibilidad selectiva por club + Intercambio anónimo por código postal */}
-          {libro.esPropio && !editando && (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-stone-400" />
-                  <span>Visible en mis clubes</span>
-                </h3>
-                <span className="text-[11px] text-stone-400">
-                  {clubesCompartidos.length === 0
-                    ? 'Solo en tu estantería'
-                    : `${clubesCompartidos.length} ${
-                        clubesCompartidos.length === 1 ? 'club' : 'clubes'
+          {libro.esPropio && (
+            <div className="space-y-4 border-t border-stone-100 pt-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2">
+                  Estado de disponibilidad
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { id: 'disponible', label: 'Disponible' },
+                    { id: 'no_disponible', label: 'No disponible' },
+                    { id: 'prestado', label: 'Prestado' },
+                  ].map((op) => (
+                    <button
+                      key={op.id}
+                      type="button"
+                      onClick={() => cambiarEstado(op.id)}
+                      className={`py-2 px-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+                        estado === op.id
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
                       }`}
-                </span>
+                    >
+                      {op.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {cargandoClubes ? (
-                <p className="text-xs text-stone-400 italic">Cargando visibilidad...</p>
-              ) : misClubes.length === 0 ? (
-                <p className="text-xs text-stone-500">
-                  Aún no perteneces a ningún club. Únete o crea uno en la pestaña Clubes.
-                </p>
-              ) : (
-                <div className="space-y-1.5">
-                  {misClubes.map((club) => {
-                    const activo = clubesCompartidos.includes(club.id)
-                    const cargandoEste = togglingClubId === club.id
-                    return (
-                      <button
-                        key={club.id}
-                        type="button"
-                        onClick={() => alternarClub(club.id)}
-                        disabled={cargandoEste}
-                        className={`w-full px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
-                          activo
-                            ? 'bg-emerald-50/80 border-emerald-300 text-emerald-900'
-                            : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
-                        }`}
-                      >
-                        <span className="truncate">{club.nombre}</span>
-                        <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
-                          {cargandoEste ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-400" />
-                          ) : activo ? (
-                            <>
-                              <Eye className="w-3.5 h-3.5 text-emerald-700" />
-                              <span className="font-semibold text-emerald-700">Visible</span>
-                            </>
-                          ) : (
-                            <>
-                              <EyeOff className="w-3.5 h-3.5 text-stone-400" />
-                              <span className="text-stone-400">Oculto</span>
-                            </>
-                          )}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* Interruptor de búsqueda anónima por código postal */}
-              <div className="pt-2 border-t border-stone-200/80 space-y-1.5">
-                <h4 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>Intercambio local anónimo</span>
-                </h4>
-
+              <div>
+                <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-sky-600" />
+                  Préstamo vecinal (Barrio)
+                </label>
                 <button
                   type="button"
-                  onClick={alternarVisibilidadLocal}
-                  disabled={togglingLocal}
-                  className={`w-full px-3 py-2.5 rounded-lg border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
+                  onClick={toggleVisibilidadLocal}
+                  disabled={guardandoVisibilidad}
+                  className={`w-full px-3.5 py-2.5 rounded-xl border text-left transition flex items-center justify-between gap-3 cursor-pointer ${
                     visibleLocal
-                      ? 'bg-sky-50 border-sky-300 text-sky-950'
-                      : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
+                      ? 'bg-sky-50 border-sky-200 text-sky-950'
+                      : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-50'
                   }`}
                 >
-                  <span className="truncate text-left">
-                    {codigoPostalUsuario
-                      ? `Visible en CP ${codigoPostalUsuario} (anónimo)`
-                      : 'Visible en mi código postal (anónimo)'}
-                  </span>
-                  <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
-                    {togglingLocal ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-400" />
-                    ) : visibleLocal ? (
-                      <>
-                        <Eye className="w-3.5 h-3.5 text-sky-700" />
-                        <span className="font-semibold text-sky-700">Activado</span>
-                      </>
-                    ) : (
-                      <>
-                        <EyeOff className="w-3.5 h-3.5 text-stone-400" />
-                        <span className="text-stone-400">Privado</span>
-                      </>
-                    )}
+                  <div>
+                    <p className="text-xs font-semibold">
+                      {visibleLocal
+                        ? `Visible en tu barrio${codigoPostalUsuario ? ` (CP ${codigoPostalUsuario})` : ''}`
+                        : 'Oculto para vecinos'}
+                    </p>
+                    <p className="text-[11px] text-stone-500 mt-0.5">
+                      Tu nombre y correo permanecen ocultos hasta que aceptes un préstamo.
+                    </p>
+                  </div>
+                  <span
+                    className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 ${
+                      visibleLocal ? 'bg-sky-600 text-white' : 'border border-stone-300 bg-white'
+                    }`}
+                  >
+                    {visibleLocal && <Check className="w-3.5 h-3.5" />}
                   </span>
                 </button>
+              </div>
 
-                {visibleLocal && !perfilLocalListo && (
-                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 leading-snug">
-                    Este libro ya está marcado, pero recuerda guardar tu <strong>Código Postal</strong> y activar la casilla general en <strong>Mi Perfil</strong> (arriba a la derecha) para que aparezca a tus vecinos.
+              <div>
+                <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-emerald-700" />
+                  Visible en mis clubes
+                </label>
+                {misClubes.length === 0 ? (
+                  <p className="text-xs text-stone-400">
+                    Aún no te has unido a ningún club. Crea uno o únete en la pestaña Clubes.
                   </p>
+                ) : (
+                  <div className="space-y-2">
+                    {misClubes.map((club) => {
+                      const activo = clubesCompartidos.includes(club.id)
+                      return (
+                        <button
+                          key={club.id}
+                          type="button"
+                          onClick={() => toggleClub(club.id)}
+                          disabled={guardandoVisibilidad}
+                          className={`w-full px-3.5 py-2.5 rounded-xl border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
+                            activo
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                              : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-50'
+                          }`}
+                        >
+                          <span>{club.nombre}</span>
+                          <span
+                            className={`w-5 h-5 rounded-md flex items-center justify-center ${
+                              activo ? 'bg-emerald-700 text-white' : 'border border-stone-300'
+                            }`}
+                          >
+                            {activo && <Check className="w-3.5 h-3.5" />}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
-            </div>
-          )}
 
-          {/* Controles de disponibilidad y borrado */}
-          {libro.esPropio && !editando && (
-            <div className="pt-1 flex flex-col sm:flex-row gap-2.5">
-              <button
-                type="button"
-                onClick={alternarDisponibilidad}
-                disabled={estado === 'prestado' || procesando}
-                className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
-                  estado === 'disponible'
-                    ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                    : estado === 'prestado'
-                    ? 'bg-stone-200 text-stone-500 cursor-not-allowed'
-                    : 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                }`}
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>
-                  {estado === 'disponible'
-                    ? 'Marcar como No disponible'
-                    : estado === 'prestado'
-                    ? 'Actualmente prestado'
-                    : 'Marcar como Disponible'}
-                </span>
-              </button>
-
-              {estado !== 'prestado' && (
+              <div className="pt-2">
                 <button
                   type="button"
-                  onClick={eliminarEjemplar}
-                  disabled={procesando}
-                  className="py-2.5 px-4 rounded-xl text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  onClick={eliminarLibro}
+                  className="w-full py-2.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  <span>Eliminar</span>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Eliminar ejemplar de mi estantería
                 </button>
-              )}
+              </div>
             </div>
           )}
         </div>
