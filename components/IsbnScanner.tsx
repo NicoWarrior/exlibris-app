@@ -74,17 +74,23 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       try {
         const { data: existente } = await supabase
           .from('libros_catalogo')
-          .select('isbn, titulo')
+          .select('isbn, titulo, autor')
           .eq('isbn', isbn)
           .maybeSingle()
 
-        if (!existente) {
-          let titulo = `Libro ISBN ${isbn}`
-          let autor = 'Autor desconocido'
-          let portadaUrl = ''
-          let genero = 'Otros'
-          let sinopsis: string | null = null
+        let titulo = existente?.titulo || ''
+        let autor = existente?.autor || ''
+        let portadaUrl = ''
+        let genero = 'Otros'
+        let sinopsis: string | null = null
 
+        const necesitaMetadatos =
+          !existente ||
+          titulo.startsWith('Libro ISBN ') ||
+          autor === 'Autor desconocido'
+
+        if (necesitaMetadatos) {
+          // 1. Intentar primero con Google Books
           try {
             const resGoogle = await fetch(
               `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
@@ -94,8 +100,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               const info = dataGoogle.items?.[0]?.volumeInfo
 
               if (info) {
-                titulo = info.title || titulo
-                autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
+                titulo = info.title || ''
+                autor = Array.isArray(info.authors) ? info.authors.join(', ') : ''
                 portadaUrl =
                   info.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
                 genero = normalizarGenero(info.categories)
@@ -103,18 +109,58 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               }
             }
           } catch {
-            // Si falla Google Books, continuamos con los datos básicos
+            // Continuar al fallback de Open Library
           }
 
-          if (!portadaUrl) {
-            portadaUrl = `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
+          // 2. Fallback a Open Library API si Google Books no devolvió título o autor
+          if (!titulo || !autor) {
+            try {
+              const resOL = await fetch(
+                `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`
+              )
+              if (resOL.ok) {
+                const dataOL = await resOL.json()
+                const libroOL = dataOL[`ISBN:${isbn}`]
+
+                if (libroOL) {
+                  if (!titulo && libroOL.title) {
+                    titulo = libroOL.subtitle
+                      ? `${libroOL.title}: ${libroOL.subtitle}`
+                      : libroOL.title
+                  }
+                  if (!autor && Array.isArray(libroOL.authors) && libroOL.authors.length > 0) {
+                    autor = libroOL.authors
+                      .map((a: { name?: string }) => a.name)
+                      .filter(Boolean)
+                      .join(', ')
+                  }
+                  if (!portadaUrl && libroOL.cover) {
+                    portadaUrl = libroOL.cover.medium || libroOL.cover.large || ''
+                  }
+                  if (genero === 'Otros' && Array.isArray(libroOL.subjects)) {
+                    const temas = libroOL.subjects
+                      .map((s: { name?: string }) => s.name)
+                      .filter(Boolean)
+                    genero = normalizarGenero(temas)
+                  }
+                }
+              }
+            } catch {
+              // Si también falla Open Library, usamos valores por defecto
+            }
           }
 
-          const { error: catError } = await supabase.from('libros_catalogo').insert({
+          const tituloFinal = titulo || `Libro ISBN ${isbn}`
+          const autorFinal = autor || 'Autor desconocido'
+          const portadaFinal =
+            portadaUrl ||
+            `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
+
+          const { error: catError } = await supabase.from('libros_catalogo').upsert({
             isbn,
-            titulo,
-            autor,
-            portada_url: portadaUrl,
+            titulo: tituloFinal,
+            autor: autorFinal,
+            portada_url: portadaFinal,
             genero,
             sinopsis,
           })
@@ -366,9 +412,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
             <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
               <button
                 type="button"
-                onClick={async () => {
-                  setModo('camara')
-                }}
+                onClick={() => setModo('camara')}
                 className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
                   modo === 'camara'
                     ? 'bg-white text-stone-900 shadow-xs'
