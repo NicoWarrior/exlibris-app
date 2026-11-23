@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import { activarNotificacionesPush } from '@/utils/notificaciones'
 import IsbnScanner from '@/components/IsbnScanner'
@@ -170,7 +171,6 @@ export default function Home() {
     getUser()
   }, [supabase, cargarDatos, sincronizarPerfilInicial])
 
-  // Suscripción global en tiempo real para actualizar el globo de Préstamos al instante
   useEffect(() => {
     if (!user?.id) return
 
@@ -244,6 +244,16 @@ export default function Home() {
           >
             Continuar con Google
           </button>
+          <p className="text-[11px] text-stone-400 mt-5 leading-relaxed">
+            Al continuar, aceptas nuestros{' '}
+            <Link
+              href="/privacidad"
+              className="text-stone-600 underline hover:text-emerald-700 transition"
+            >
+              Términos de Uso y Política de Privacidad
+            </Link>
+            .
+          </p>
         </div>
       </main>
     )
