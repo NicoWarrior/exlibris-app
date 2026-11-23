@@ -1,34 +1,18 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { createClient } from '@/utils/supabase/client'
-import { extraerPremios, normalizarGenero } from '@/utils/generos'
+import { normalizarGenero } from '@/utils/generos'
 import {
-  Award,
   Camera,
-  Check,
-  CheckCircle2,
+  Flashlight,
+  Keyboard,
   Loader2,
-  Search,
-  Users,
+  ScanBarcode,
+  ZoomIn,
   X,
 } from 'lucide-react'
-
-interface BookData {
-  isbn: string
-  titulo: string
-  autor: string
-  portada_url: string
-  genero?: string | null
-  sinopsis?: string | null
-  premios?: string | null
-}
-
-interface ClubOpcion {
-  id: string
-  nombre: string
-}
 
 interface IsbnScannerProps {
   userId: string
@@ -37,442 +21,435 @@ interface IsbnScannerProps {
 }
 
 export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScannerProps) {
-  const [book, setBook] = useState<BookData | null>(null)
-  const [manualIsbn, setManualIsbn] = useState('')
-  const [status, setStatus] = useState<
-    'scanning' | 'searching' | 'found' | 'saving' | 'saved' | 'error'
-  >('scanning')
-  const [errorMsg, setErrorMsg] = useState('')
-
-  // Clubes del usuario para visibilidad selectiva al guardar
-  const [misClubes, setMisClubes] = useState<ClubOpcion[]>([])
-  const [clubesSeleccionados, setClubesSeleccionados] = useState<string[]>([])
+  const supabase = createClient()
+  const [modo, setModo] = useState<'camara' | 'manual'>('camara')
+  const [isbnManual, setIsbnManual] = useState('')
+  const [procesando, setProcesando] = useState(false)
+  const [errorCamara, setErrorCamara] = useState<string | null>(null)
+  const [linternaActiva, setLinternaActiva] = useState(false)
+  const [soportaLinterna, setSoportaLinterna] = useState(false)
+  const [zoomActivo, setZoomActivo] = useState(false)
+  const [soportaZoom, setSoportaZoom] = useState(false)
 
   const scannerRef = useRef<Html5Qrcode | null>(null)
-  const supabase = createClient()
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null)
+  const escaneadoRef = useRef(false)
 
-  // Cargar clubes a los que pertenece el usuario
-  useEffect(() => {
-    const cargarClubesUsuario = async () => {
-      const { data: membresias } = await supabase
-        .from('miembros_club')
-        .select('club_id')
-        .eq('usuario_id', userId)
-
-      if (membresias && membresias.length > 0) {
-        const clubIds = membresias.map((m) => m.club_id)
-        const { data: clubesData } = await supabase
-          .from('clubes')
-          .select('id, nombre')
-          .in('id', clubIds)
-
-        if (clubesData && clubesData.length > 0) {
-          setMisClubes(clubesData)
-          // Por defecto seleccionados; el usuario puede desmarcar los que no quiera
-          setClubesSeleccionados(clubesData.map((c) => c.id))
-        }
+  const registrarLibroPorIsbn = useCallback(
+    async (isbnCrudo: string) => {
+      const isbn = isbnCrudo.replace(/[^0-9Xx]/g, '').toUpperCase()
+      if (isbn.length !== 10 && isbn.length !== 13) {
+        alert('El ISBN debe tener 10 o 13 dígitos.')
+        return
       }
-    }
 
-    cargarClubesUsuario()
-  }, [supabase, userId])
+      if (procesando) return
+      setProcesando(true)
+
+      try {
+        // 1. Comprobar si ya existe en libros_catalogo
+        const { data: existente } = await supabase
+          .from('libros_catalogo')
+          .select('isbn, titulo')
+          .eq('isbn', isbn)
+          .maybeSingle()
+
+        if (!existente) {
+          let titulo = `Libro ISBN ${isbn}`
+          let autor = 'Autor desconocido'
+          let portadaUrl = ''
+          let genero = 'Otros'
+          let sinopsis: string | null = null
+
+          // Consultar Google Books
+          const resGoogle = await fetch(
+            `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
+          )
+          const dataGoogle = await resGoogle.json()
+          const info = dataGoogle.items?.[0]?.volumeInfo
+
+          if (info) {
+            titulo = info.title || titulo
+            autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
+            portadaUrl =
+              info.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
+            genero = normalizarGenero(info.categories)
+            sinopsis = info.description || null
+          }
+
+          if (!portadaUrl) {
+            portadaUrl = `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
+          }
+
+          const { error: catError } = await supabase.from('libros_catalogo').insert({
+            isbn,
+            titulo,
+            autor,
+            portada_url: portadaUrl,
+            genero,
+            sinopsis,
+          })
+
+          if (catError) throw catError
+        }
+
+        // 2. Crear ejemplar en la estantería del usuario
+        const { data: nuevoEjemplar, error: ejError } = await supabase
+          .from('ejemplares')
+          .insert({
+            isbn,
+            propietario_id: userId,
+            estado: 'disponible',
+            visible_local: false,
+          })
+          .select('id')
+          .single()
+
+        if (ejError) throw ejError
+
+        // 3. Compartir automáticamente en los clubes del usuario
+        if (nuevoEjemplar?.id) {
+          const { data: membresias } = await supabase
+            .from('miembros_club')
+            .select('club_id')
+            .eq('usuario_id', userId)
+
+          if (membresias && membresias.length > 0) {
+            await supabase.from('ejemplares_club').insert(
+              membresias.map((m) => ({
+                ejemplar_id: nuevoEjemplar.id,
+                club_id: m.club_id,
+              }))
+            )
+          }
+        }
+
+        onBookAdded()
+        onClose()
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Error al guardar el libro'
+        alert(msg)
+        escaneadoRef.current = false
+      } finally {
+        setProcesando(false)
+      }
+    },
+    [supabase, userId, procesando, onBookAdded, onClose]
+  )
 
   useEffect(() => {
-    const startCamera = async () => {
+    if (modo !== 'camara') return
+
+    let montado = true
+    escaneadoRef.current = false
+    setErrorCamara(null)
+
+    const iniciarCamara = async () => {
       try {
-        const html5QrCode = new Html5Qrcode('reader', {
+        const html5Qr = new Html5Qrcode('reader-isbn', {
           formatsToSupport: [
             Html5QrcodeSupportedFormats.EAN_13,
             Html5QrcodeSupportedFormats.EAN_8,
           ],
+          experimentalFeatures: {
+            useBarCodeDetectorIfSupported: true,
+          },
           verbose: false,
         })
-        scannerRef.current = html5QrCode
+        scannerRef.current = html5Qr
 
-        await html5QrCode.start(
+        await html5Qr.start(
           { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 150 } },
-          async (decodedText) => {
-            await stopCamera()
-            buscarLibro(decodedText)
+          {
+            fps: 15,
+            qrbox: (viewfinderWidth, viewfinderHeight) => ({
+              width: Math.min(Math.floor(viewfinderWidth * 0.85), 340),
+              height: Math.min(Math.floor(viewfinderHeight * 0.35), 130),
+            }),
+            aspectRatio: 1.5,
+            videoConstraints: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
           },
-          () => {}
+          (decodedText) => {
+            if (escaneadoRef.current) return
+            const limpio = decodedText.replace(/\D/g, '')
+            if (limpio.length === 13 || limpio.length === 10) {
+              escaneadoRef.current = true
+              if (navigator.vibrate) navigator.vibrate(80)
+              html5Qr
+                .stop()
+                .catch(() => {})
+                .finally(() => registrarLibroPorIsbn(limpio))
+            }
+          },
+          () => {
+            // Ignorar frames sin lectura
+          }
         )
-      } catch (err) {
-        console.error(err)
-        setErrorMsg(
-          'No se pudo acceder a la cámara. Puedes introducir el ISBN manualmente abajo.'
-        )
-      }
-    }
 
-    startCamera()
+        // Aplicar enfoque continuo y comprobar capacidades de linterna / zoom
+        if (montado) {
+          const videoEl = document.querySelector('#reader-isbn video') as HTMLVideoElement | null
+          const stream = videoEl?.srcObject as MediaStream | null
+          const track = stream?.getVideoTracks()?.[0] || null
+          videoTrackRef.current = track
 
-    return () => {
-      stopCamera()
-    }
-  }, [])
+          if (track && typeof track.getCapabilities === 'function') {
+            const caps = track.getCapabilities() as MediaTrackCapabilities & {
+              focusMode?: string[]
+              torch?: boolean
+              zoom?: { min: number; max: number; step: number }
+            }
 
-  const stopCamera = async () => {
-    if (scannerRef.current && scannerRef.current.isScanning) {
-      try {
-        await scannerRef.current.stop()
-        scannerRef.current.clear()
-      } catch (e) {
-        console.error(e)
-      }
-    }
-  }
+            const constraintsAvanzados: Record<string, unknown> = {}
 
-  const toggleClub = (clubId: string) => {
-    setClubesSeleccionados((prev) =>
-      prev.includes(clubId) ? prev.filter((id) => id !== clubId) : [...prev, clubId]
-    )
-  }
+            if (caps.focusMode?.includes('continuous')) {
+              constraintsAvanzados.focusMode = 'continuous'
+            }
 
-  const buscarLibro = async (rawIsbn: string) => {
-    const cleanIsbn = rawIsbn.replace(/[^0-9X]/gi, '')
-    if (!cleanIsbn) return
+            if (caps.zoom && caps.zoom.max >= 1.5) {
+              setSoportaZoom(true)
+              const zoomInicial = Math.min(1.5, caps.zoom.max)
+              constraintsAvanzados.zoom = zoomInicial
+              setZoomActivo(true)
+            }
 
-    setStatus('searching')
-    setErrorMsg('')
+            if (caps.torch) {
+              setSoportaLinterna(true)
+            }
 
-    try {
-      // 1. Buscar en el catálogo de Supabase
-      const { data: existingBook } = await supabase
-        .from('libros_catalogo')
-        .select('*')
-        .eq('isbn', cleanIsbn)
-        .maybeSingle()
-
-      if (existingBook) {
-        setBook({
-          isbn: existingBook.isbn,
-          titulo: existingBook.titulo,
-          autor: existingBook.autor || 'Autor desconocido',
-          portada_url: existingBook.portada_url || '',
-          genero: existingBook.genero || null,
-          sinopsis: existingBook.sinopsis || null,
-          premios: existingBook.premios || null,
-        })
-        setStatus('found')
-        return
-      }
-
-      // 2. Consultar Google Books API
-      const gRes = await fetch(
-        `https://www.googleapis.com/books/v1/volumes?q=isbn:${cleanIsbn}`
-      )
-      const gData = await gRes.json()
-
-      if (gData.items && gData.items.length > 0) {
-        const info = gData.items[0].volumeInfo
-        setBook({
-          isbn: cleanIsbn,
-          titulo: info.title || 'Sin título',
-          autor: info.authors ? info.authors.join(', ') : 'Autor desconocido',
-          portada_url:
-            info.imageLinks?.thumbnail?.replace('http://', 'https://') || '',
-          genero: normalizarGenero(info.categories),
-          sinopsis: info.description || null,
-          premios: extraerPremios(info.categories, info.description),
-        })
-        setStatus('found')
-        return
-      }
-
-      // 3. Fallback a Open Library API
-      const olRes = await fetch(
-        `https://openlibrary.org/api/books?bibkeys=ISBN:${cleanIsbn}&format=json&jscmd=data`
-      )
-      const olData = await olRes.json()
-      const olBook = olData[`ISBN:${cleanIsbn}`]
-
-      if (olBook) {
-        const subjects = olBook.subjects?.map((s: any) => s.name) || []
-        setBook({
-          isbn: cleanIsbn,
-          titulo: olBook.title || 'Sin título',
-          autor: olBook.authors
-            ? olBook.authors.map((a: any) => a.name).join(', ')
-            : 'Autor desconocido',
-          portada_url: olBook.cover?.medium || '',
-          genero: normalizarGenero(subjects),
-          sinopsis: null,
-          premios: extraerPremios(subjects, null),
-        })
-        setStatus('found')
-        return
-      }
-
-      setStatus('error')
-      setErrorMsg(`No encontramos datos para el ISBN ${cleanIsbn}.`)
-    } catch {
-      setStatus('error')
-      setErrorMsg('Error de conexión al buscar el libro.')
-    }
-  }
-
-  const guardarEnEstanteria = async () => {
-    if (!book) return
-    setStatus('saving')
-
-    try {
-      // 1. Insertar o actualizar en catálogo global
-      const { error: catError } = await supabase.from('libros_catalogo').upsert([
-        {
-          isbn: book.isbn,
-          titulo: book.titulo,
-          autor: book.autor,
-          portada_url: book.portada_url,
-          genero: book.genero || 'Otros',
-          sinopsis: book.sinopsis || null,
-          premios: book.premios || null,
-        },
-      ])
-
-      if (catError) throw catError
-
-      // 2. Comprobar si ya tienes este libro en tu estantería
-      const { data: yaLoTengo } = await supabase
-        .from('ejemplares')
-        .select('id')
-        .eq('isbn', book.isbn)
-        .eq('propietario_id', userId)
-        .maybeSingle()
-
-      if (yaLoTengo) {
-        setStatus('error')
-        setErrorMsg('Ya tienes un ejemplar de este libro en tu estantería.')
-        return
-      }
-
-      // 3. Crear el ejemplar físico y recuperar su ID generado
-      const { data: nuevoEjemplar, error: ejError } = await supabase
-        .from('ejemplares')
-        .insert({
-          isbn: book.isbn,
-          propietario_id: userId,
-          estado: 'disponible',
-        })
-        .select('id')
-        .single()
-
-      if (ejError || !nuevoEjemplar) throw ejError
-
-      // 4. Registrar la visibilidad en los clubes seleccionados
-      if (clubesSeleccionados.length > 0) {
-        const filasClubes = clubesSeleccionados.map((clubId) => ({
-          ejemplar_id: nuevoEjemplar.id,
-          club_id: clubId,
-        }))
-        const { error: clubRelError } = await supabase
-          .from('ejemplares_club')
-          .insert(filasClubes)
-
-        if (clubRelError) {
-          console.error('Error al asociar clubes:', clubRelError)
+            if (Object.keys(constraintsAvanzados).length > 0) {
+              await track.applyConstraints({
+                advanced: [constraintsAvanzados as MediaTrackConstraintSet],
+              })
+            }
+          }
+        }
+      } catch {
+        if (montado) {
+          setErrorCamara(
+            'No se pudo abrir la cámara. Comprueba los permisos del navegador o introduce el ISBN a mano.'
+          )
         }
       }
+    }
 
-      setStatus('saved')
-      setTimeout(() => {
-        onBookAdded()
-        onClose()
-      }, 1200)
-    } catch (err: any) {
-      console.error(err)
-      setStatus('error')
-      setErrorMsg(
-        `Error al guardar en Supabase: ${err.message || 'Verifica nombres de columnas/RLS'}`
-      )
+    iniciarCamara()
+
+    return () => {
+      montado = false
+      const qr = scannerRef.current
+      if (qr) {
+        qr.stop()
+          .then(() => qr.clear())
+          .catch(() => {})
+      }
+      videoTrackRef.current = null
+      setLinternaActiva(false)
+      setZoomActivo(false)
+    }
+  }, [modo, registrarLibroPorIsbn])
+
+  const toggleLinterna = async () => {
+    const track = videoTrackRef.current
+    if (!track) return
+    const nuevoEstado = !linternaActiva
+    try {
+      await track.applyConstraints({
+        advanced: [{ torch: nuevoEstado } as MediaTrackConstraintSet],
+      })
+      setLinternaActiva(nuevoEstado)
+    } catch {
+      // Dispositivo no permite alternar torch en caliente
+    }
+  }
+
+  const toggleZoom = async () => {
+    const track = videoTrackRef.current
+    if (!track) return
+    const caps = track.getCapabilities() as MediaTrackCapabilities & {
+      zoom?: { min: number; max: number }
+    }
+    if (!caps.zoom) return
+    const nuevoZoom = zoomActivo ? 1 : Math.min(1.6, caps.zoom.max)
+    try {
+      await track.applyConstraints({
+        advanced: [{ zoom: nuevoZoom } as MediaTrackConstraintSet],
+      })
+      setZoomActivo(!zoomActivo)
+    } catch {
+      // Ignorar si no aplica
+    }
+  }
+
+  const tocarParaEnfocar = async () => {
+    const track = videoTrackRef.current
+    if (!track) return
+    try {
+      await track.applyConstraints({
+        advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+      })
+    } catch {
+      // Ignorar en navegadores sin control manual de foco
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-stone-900/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl relative max-h-[90vh] overflow-y-auto">
-        <button
-          onClick={async () => {
-            await stopCamera()
-            onClose()
-          }}
-          className="absolute top-4 right-4 text-stone-400 hover:text-stone-700 cursor-pointer"
-        >
-          <X className="w-6 h-6" />
-        </button>
+    <div
+      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-xl border border-stone-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-3.5 border-b border-stone-100 flex items-center justify-between">
+          <div className="flex items-center gap-2 font-bold text-stone-900 text-sm">
+            <ScanBarcode className="w-4 h-4 text-emerald-700" />
+            <span>Añadir libro por ISBN</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-stone-400 hover:text-stone-700 rounded-full hover:bg-stone-100 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-        <h2 className="text-lg font-bold text-stone-900 mb-4 flex items-center gap-2">
-          <Camera className="w-5 h-5 text-emerald-700" />
-          Añadir libro por ISBN
-        </h2>
+        <div className="p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setModo('camara')}
+              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                modo === 'camara'
+                  ? 'bg-white text-stone-900 shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>Cámara</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setModo('manual')}
+              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                modo === 'manual'
+                  ? 'bg-white text-stone-900 shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+              <span>Escribir ISBN</span>
+            </button>
+          </div>
 
-        {status === 'scanning' && (
-          <div className="space-y-4">
-            <div
-              id="reader"
-              className="w-full overflow-hidden rounded-xl bg-stone-100 min-h-[220px]"
-            />
-            <p className="text-xs text-center text-stone-500">
-              Apunta la cámara al código de barras trasero del libro
-            </p>
+          {procesando ? (
+            <div className="py-14 flex flex-col items-center justify-center text-center gap-2">
+              <Loader2 className="w-7 h-7 animate-spin text-emerald-700" />
+              <p className="text-xs font-semibold text-stone-800">
+                Buscando ficha y portada del libro...
+              </p>
+            </div>
+          ) : modo === 'camara' ? (
+            <div className="space-y-3">
+              {errorCamara ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-2">
+                  <p>{errorCamara}</p>
+                  <button
+                    type="button"
+                    onClick={() => setModo('manual')}
+                    className="px-3 py-1.5 bg-amber-800 text-white rounded-lg font-semibold cursor-pointer"
+                  >
+                    Introducir ISBN manualmente
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div
+                    onClick={tocarParaEnfocar}
+                    className="relative rounded-2xl overflow-hidden bg-black border border-stone-200 cursor-pointer"
+                  >
+                    <div id="reader-isbn" className="w-full" />
 
-            <div className="pt-2 border-t border-stone-100">
-              <label className="block text-xs font-medium text-stone-600 mb-1">
-                O introduce el ISBN manualmente (ej. 9788408043645):
-              </label>
-              <div className="flex gap-2">
+                    {(soportaLinterna || soportaZoom) && (
+                      <div
+                        className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5 z-10"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {soportaZoom && (
+                          <button
+                            type="button"
+                            onClick={toggleZoom}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 backdrop-blur-xs transition cursor-pointer ${
+                              zoomActivo
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-black/65 text-white hover:bg-black/80'
+                            }`}
+                          >
+                            <ZoomIn className="w-3.5 h-3.5" />
+                            <span>{zoomActivo ? '1.5x' : '1x'}</span>
+                          </button>
+                        )}
+                        {soportaLinterna && (
+                          <button
+                            type="button"
+                            onClick={toggleLinterna}
+                            className={`p-2 rounded-lg backdrop-blur-xs transition cursor-pointer ${
+                              linternaActiva
+                                ? 'bg-amber-400 text-stone-950'
+                                : 'bg-black/65 text-white hover:bg-black/80'
+                            }`}
+                            title="Encender/apagar linterna"
+                          >
+                            <Flashlight className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="text-[11px] text-stone-500 text-center leading-relaxed">
+                    Separa el móvil unos <strong>15–20 cm</strong> del código de barras (el que empieza por <strong>978</strong> o <strong>979</strong>) y toca la imagen si necesita reenfocar.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                registrarLibroPorIsbn(isbnManual)
+              }}
+              className="space-y-3 py-2"
+            >
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1.5">
+                  Código ISBN (10 o 13 dígitos)
+                </label>
                 <input
                   type="text"
-                  value={manualIsbn}
-                  onChange={(e) => setManualIsbn(e.target.value)}
-                  placeholder="978..."
-                  className="flex-1 px-3 py-2 border border-stone-300 rounded-lg text-sm focus:outline-none focus:border-emerald-600"
+                  inputMode="numeric"
+                  required
+                  value={isbnManual}
+                  onChange={(e) => setIsbnManual(e.target.value)}
+                  placeholder="Ej. 9788408043645"
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-sm text-stone-900 focus:outline-none focus:border-emerald-600"
                 />
-                <button
-                  onClick={() => {
-                    stopCamera()
-                    buscarLibro(manualIsbn)
-                  }}
-                  className="px-4 py-2 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800 flex items-center gap-1 cursor-pointer"
-                >
-                  <Search className="w-4 h-4" />
-                  Buscar
-                </button>
               </div>
-            </div>
-          </div>
-        )}
-
-        {status === 'searching' && (
-          <div className="py-12 text-center space-y-3">
-            <Loader2 className="w-8 h-8 text-emerald-700 animate-spin mx-auto" />
-            <p className="text-sm text-stone-600">
-              Consultando catálogo y bases bibliográficas...
-            </p>
-          </div>
-        )}
-
-        {status === 'found' && book && (
-          <div className="space-y-4">
-            <div className="flex gap-4 bg-stone-50 p-4 rounded-xl border border-stone-200">
-              {book.portada_url ? (
-                <img
-                  src={book.portada_url}
-                  alt={book.titulo}
-                  className="w-20 h-28 object-cover rounded-md shadow-sm"
-                />
-              ) : (
-                <div className="w-20 h-28 bg-stone-200 rounded-md flex items-center justify-center text-xs text-stone-500 text-center p-1">
-                  Sin portada
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <span className="text-[11px] font-mono text-stone-400">
-                  ISBN: {book.isbn}
-                </span>
-                <h3 className="font-bold text-stone-900 leading-snug mt-0.5">
-                  {book.titulo}
-                </h3>
-                <p className="text-sm text-stone-600 mt-1">{book.autor}</p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {book.genero && (
-                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-700">
-                      {book.genero}
-                    </span>
-                  )}
-                  {book.premios && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                      <Award className="w-2.5 h-2.5" />
-                      {book.premios}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Selector de clubes donde compartir este libro */}
-            {misClubes.length > 0 && (
-              <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-stone-700 flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-emerald-700" />
-                    Compartir en mis clubes
-                  </span>
-                  <span className="text-[11px] text-stone-400">
-                    {clubesSeleccionados.length === 0
-                      ? 'Solo estantería personal'
-                      : `${clubesSeleccionados.length} de ${misClubes.length}`}
-                  </span>
-                </div>
-
-                <div className="space-y-1.5">
-                  {misClubes.map((club) => {
-                    const marcado = clubesSeleccionados.includes(club.id)
-                    return (
-                      <button
-                        key={club.id}
-                        type="button"
-                        onClick={() => toggleClub(club.id)}
-                        className={`w-full px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
-                          marcado
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
-                            : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
-                        }`}
-                      >
-                        <span className="truncate">{club.nombre}</span>
-                        <span
-                          className={`w-4 h-4 rounded flex items-center justify-center border ${
-                            marcado
-                              ? 'bg-emerald-700 border-emerald-700 text-white'
-                              : 'border-stone-300 bg-white'
-                          }`}
-                        >
-                          {marcado && <Check className="w-3 h-3" />}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="flex gap-2 pt-1">
               <button
-                onClick={() => setStatus('scanning')}
-                className="flex-1 py-2.5 px-4 border border-stone-300 text-stone-700 rounded-xl text-sm font-medium hover:bg-stone-50 cursor-pointer"
+                type="submit"
+                className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-xs cursor-pointer"
               >
-                Reintentar
+                Buscar y añadir libro
               </button>
-              <button
-                onClick={guardarEnEstanteria}
-                className="flex-1 py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-sm font-medium cursor-pointer"
-              >
-                Guardar en mi estantería
-              </button>
-            </div>
-          </div>
-        )}
-
-        {status === 'saving' && (
-          <div className="py-12 text-center space-y-3">
-            <Loader2 className="w-8 h-8 text-emerald-700 animate-spin mx-auto" />
-            <p className="text-sm text-stone-600">Guardando en tu biblioteca...</p>
-          </div>
-        )}
-
-        {status === 'saved' && (
-          <div className="py-10 text-center space-y-2">
-            <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
-            <p className="font-bold text-stone-900">¡Libro añadido a tu estantería!</p>
-          </div>
-        )}
-
-        {(status === 'error' || errorMsg) && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
-            {errorMsg}
-          </div>
-        )}
+            </form>
+          )}
+        </div>
       </div>
     </div>
   )
