@@ -35,19 +35,43 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
   const videoTrackRef = useRef<MediaStreamTrack | null>(null)
   const escaneadoRef = useRef(false)
 
+  const detenerCamaraSegura = useCallback(async () => {
+    const track = videoTrackRef.current
+    if (track) {
+      try {
+        track.stop()
+      } catch {
+        // Ignorar
+      }
+      videoTrackRef.current = null
+    }
+
+    const qr = scannerRef.current
+    scannerRef.current = null
+    if (qr) {
+      try {
+        if (qr.isScanning) {
+          await qr.stop()
+        }
+        qr.clear()
+      } catch {
+        // Ignorar si ya estaba detenido
+      }
+    }
+  }, [])
+
   const registrarLibroPorIsbn = useCallback(
     async (isbnCrudo: string) => {
       const isbn = isbnCrudo.replace(/[^0-9Xx]/g, '').toUpperCase()
       if (isbn.length !== 10 && isbn.length !== 13) {
         alert('El ISBN debe tener 10 o 13 dígitos.')
+        escaneadoRef.current = false
         return
       }
 
-      if (procesando) return
       setProcesando(true)
 
       try {
-        // 1. Comprobar si ya existe en libros_catalogo
         const { data: existente } = await supabase
           .from('libros_catalogo')
           .select('isbn, titulo')
@@ -61,20 +85,25 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           let genero = 'Otros'
           let sinopsis: string | null = null
 
-          // Consultar Google Books
-          const resGoogle = await fetch(
-            `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
-          )
-          const dataGoogle = await resGoogle.json()
-          const info = dataGoogle.items?.[0]?.volumeInfo
+          try {
+            const resGoogle = await fetch(
+              `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
+            )
+            if (resGoogle.ok) {
+              const dataGoogle = await resGoogle.json()
+              const info = dataGoogle.items?.[0]?.volumeInfo
 
-          if (info) {
-            titulo = info.title || titulo
-            autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
-            portadaUrl =
-              info.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
-            genero = normalizarGenero(info.categories)
-            sinopsis = info.description || null
+              if (info) {
+                titulo = info.title || titulo
+                autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
+                portadaUrl =
+                  info.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
+                genero = normalizarGenero(info.categories)
+                sinopsis = info.description || null
+              }
+            }
+          } catch {
+            // Si falla Google Books, continuamos con los datos básicos
           }
 
           if (!portadaUrl) {
@@ -93,7 +122,6 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           if (catError) throw catError
         }
 
-        // 2. Crear ejemplar en la estantería del usuario
         const { data: nuevoEjemplar, error: ejError } = await supabase
           .from('ejemplares')
           .insert({
@@ -107,7 +135,6 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
 
         if (ejError) throw ejError
 
-        // 3. Compartir automáticamente en los clubes del usuario
         if (nuevoEjemplar?.id) {
           const { data: membresias } = await supabase
             .from('miembros_club')
@@ -130,12 +157,16 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         const msg = err instanceof Error ? err.message : 'Error al guardar el libro'
         alert(msg)
         escaneadoRef.current = false
-      } finally {
         setProcesando(false)
       }
     },
-    [supabase, userId, procesando, onBookAdded, onClose]
+    [supabase, userId, onBookAdded, onClose]
   )
+
+  const registrarRef = useRef(registrarLibroPorIsbn)
+  useEffect(() => {
+    registrarRef.current = registrarLibroPorIsbn
+  }, [registrarLibroPorIsbn])
 
   useEffect(() => {
     if (modo !== 'camara') return
@@ -161,28 +192,34 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         await html5Qr.start(
           { facingMode: 'environment' },
           {
-            fps: 15,
+            fps: 12,
             qrbox: (viewfinderWidth, viewfinderHeight) => ({
-              width: Math.min(Math.floor(viewfinderWidth * 0.85), 340),
-              height: Math.min(Math.floor(viewfinderHeight * 0.35), 130),
+              width: Math.min(Math.floor(viewfinderWidth * 0.85), 320),
+              height: Math.min(Math.floor(viewfinderHeight * 0.35), 120),
             }),
             aspectRatio: 1.5,
             videoConstraints: {
               facingMode: { ideal: 'environment' },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
             },
           },
-          (decodedText) => {
-            if (escaneadoRef.current) return
+          async (decodedText) => {
+            if (escaneadoRef.current || !montado) return
             const limpio = decodedText.replace(/\D/g, '')
             if (limpio.length === 13 || limpio.length === 10) {
               escaneadoRef.current = true
-              if (navigator.vibrate) navigator.vibrate(80)
-              html5Qr
-                .stop()
-                .catch(() => {})
-                .finally(() => registrarLibroPorIsbn(limpio))
+              if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                try {
+                  navigator.vibrate(70)
+                } catch {
+                  // Ignorar
+                }
+              }
+              await detenerCamaraSegura()
+              if (montado) {
+                registrarRef.current(limpio)
+              }
             }
           },
           () => {
@@ -190,14 +227,18 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           }
         )
 
-        // Aplicar enfoque continuo y comprobar capacidades de linterna / zoom
-        if (montado) {
-          const videoEl = document.querySelector('#reader-isbn video') as HTMLVideoElement | null
-          const stream = videoEl?.srcObject as MediaStream | null
-          const track = stream?.getVideoTracks()?.[0] || null
-          videoTrackRef.current = track
+        if (!montado) {
+          await detenerCamaraSegura()
+          return
+        }
 
-          if (track && typeof track.getCapabilities === 'function') {
+        const videoEl = document.querySelector('#reader-isbn video') as HTMLVideoElement | null
+        const stream = videoEl?.srcObject as MediaStream | null
+        const track = stream?.getVideoTracks()?.[0] || null
+        videoTrackRef.current = track
+
+        if (track && typeof track.getCapabilities === 'function') {
+          try {
             const caps = track.getCapabilities() as MediaTrackCapabilities & {
               focusMode?: string[]
               torch?: boolean
@@ -210,10 +251,9 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               constraintsAvanzados.focusMode = 'continuous'
             }
 
-            if (caps.zoom && caps.zoom.max >= 1.5) {
+            if (caps.zoom && caps.zoom.max >= 1.4) {
               setSoportaZoom(true)
-              const zoomInicial = Math.min(1.5, caps.zoom.max)
-              constraintsAvanzados.zoom = zoomInicial
+              constraintsAvanzados.zoom = Math.min(1.4, caps.zoom.max)
               setZoomActivo(true)
             }
 
@@ -226,6 +266,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 advanced: [constraintsAvanzados as MediaTrackConstraintSet],
               })
             }
+          } catch {
+            // Algunos navegadores móviles ignoran constraints avanzados
           }
         }
       } catch {
@@ -241,17 +283,11 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
 
     return () => {
       montado = false
-      const qr = scannerRef.current
-      if (qr) {
-        qr.stop()
-          .then(() => qr.clear())
-          .catch(() => {})
-      }
-      videoTrackRef.current = null
+      detenerCamaraSegura()
       setLinternaActiva(false)
       setZoomActivo(false)
     }
-  }, [modo, registrarLibroPorIsbn])
+  }, [modo, detenerCamaraSegura])
 
   const toggleLinterna = async () => {
     const track = videoTrackRef.current
@@ -263,25 +299,25 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       })
       setLinternaActiva(nuevoEstado)
     } catch {
-      // Dispositivo no permite alternar torch en caliente
+      // Ignorar
     }
   }
 
   const toggleZoom = async () => {
     const track = videoTrackRef.current
     if (!track) return
-    const caps = track.getCapabilities() as MediaTrackCapabilities & {
-      zoom?: { min: number; max: number }
-    }
-    if (!caps.zoom) return
-    const nuevoZoom = zoomActivo ? 1 : Math.min(1.6, caps.zoom.max)
     try {
+      const caps = track.getCapabilities() as MediaTrackCapabilities & {
+        zoom?: { min: number; max: number }
+      }
+      if (!caps.zoom) return
+      const nuevoZoom = zoomActivo ? 1 : Math.min(1.5, caps.zoom.max)
       await track.applyConstraints({
         advanced: [{ zoom: nuevoZoom } as MediaTrackConstraintSet],
       })
       setZoomActivo(!zoomActivo)
     } catch {
-      // Ignorar si no aplica
+      // Ignorar
     }
   }
 
@@ -293,14 +329,19 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
       })
     } catch {
-      // Ignorar en navegadores sin control manual de foco
+      // Ignorar
     }
+  }
+
+  const handleCerrar = async () => {
+    await detenerCamaraSegura()
+    onClose()
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={handleCerrar}
     >
       <div
         className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-xl border border-stone-200"
@@ -313,7 +354,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleCerrar}
             className="p-1.5 text-stone-400 hover:text-stone-700 rounded-full hover:bg-stone-100 cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -321,32 +362,39 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         </div>
 
         <div className="p-4 space-y-4">
-          <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setModo('camara')}
-              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                modo === 'camara'
-                  ? 'bg-white text-stone-900 shadow-xs'
-                  : 'text-stone-600 hover:text-stone-900'
-              }`}
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span>Cámara</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setModo('manual')}
-              className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                modo === 'manual'
-                  ? 'bg-white text-stone-900 shadow-xs'
-                  : 'text-stone-600 hover:text-stone-900'
-              }`}
-            >
-              <Keyboard className="w-3.5 h-3.5" />
-              <span>Escribir ISBN</span>
-            </button>
-          </div>
+          {!procesando && (
+            <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
+              <button
+                type="button"
+                onClick={async () => {
+                  setModo('camara')
+                }}
+                className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  modo === 'camara'
+                    ? 'bg-white text-stone-900 shadow-xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Cámara</span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await detenerCamaraSegura()
+                  setModo('manual')
+                }}
+                className={`py-2 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                  modo === 'manual'
+                    ? 'bg-white text-stone-900 shadow-xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Keyboard className="w-3.5 h-3.5" />
+                <span>Escribir ISBN</span>
+              </button>
+            </div>
+          )}
 
           {procesando ? (
             <div className="py-14 flex flex-col items-center justify-center text-center gap-2">
@@ -385,24 +433,24 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                           <button
                             type="button"
                             onClick={toggleZoom}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 backdrop-blur-xs transition cursor-pointer ${
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
                               zoomActivo
                                 ? 'bg-emerald-600 text-white'
-                                : 'bg-black/65 text-white hover:bg-black/80'
+                                : 'bg-black/70 text-white hover:bg-black/85'
                             }`}
                           >
                             <ZoomIn className="w-3.5 h-3.5" />
-                            <span>{zoomActivo ? '1.5x' : '1x'}</span>
+                            <span>{zoomActivo ? '1.4x' : '1x'}</span>
                           </button>
                         )}
                         {soportaLinterna && (
                           <button
                             type="button"
                             onClick={toggleLinterna}
-                            className={`p-2 rounded-lg backdrop-blur-xs transition cursor-pointer ${
+                            className={`p-2 rounded-lg transition cursor-pointer ${
                               linternaActiva
                                 ? 'bg-amber-400 text-stone-950'
-                                : 'bg-black/65 text-white hover:bg-black/80'
+                                : 'bg-black/70 text-white hover:bg-black/85'
                             }`}
                             title="Encender/apagar linterna"
                           >
