@@ -70,7 +70,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [cargandoChat, setCargandoChat] = useState(false)
   const [nuevoMensaje, setNuevoMensaje] = useState('')
   const [enviandoMensaje, setEnviandoMensaje] = useState(false)
-  const mensajesEndRef = useRef<HTMLDivElement | null>(null)
+  const chatContainerRef = useRef<HTMLDivElement | null>(null)
 
   const cargarPrestamos = useCallback(async () => {
     setCargando(true)
@@ -220,9 +220,9 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       setPrestamos((prev) =>
         prev.map((p) => (p.id === prestamoId ? { ...p, sin_leer_count: 0 } : p))
       )
-      onCambioEstado()
+      onCambioEstadoRef.current()
     },
-    [supabase, userId, onCambioEstado]
+    [supabase, userId]
   )
 
   useEffect(() => {
@@ -279,8 +279,11 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   }, [chatAbiertoId, supabase, userId, marcarChatComoLeido])
 
   useEffect(() => {
-    mensajesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [mensajes])
+    const el = chatContainerRef.current
+    if (el) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [mensajes.length, chatAbiertoId])
 
   const subirFotoEstado = async (
     prestamoId: string,
@@ -850,7 +853,10 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                       </span>
                     </div>
 
-                    <div className="bg-white border border-stone-200 rounded-xl p-3 h-56 overflow-y-auto space-y-2.5">
+                    <div
+                      ref={chatContainerRef}
+                      className="bg-white border border-stone-200 rounded-xl p-3 h-56 overflow-y-auto space-y-2.5"
+                    >
                       {cargandoChat ? (
                         <div className="h-full flex items-center justify-center text-xs text-stone-400">
                           <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
