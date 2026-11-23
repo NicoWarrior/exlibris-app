@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
+import ExplorarLocalTab from '@/components/ExplorarLocalTab'
 import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PerfilModal from '@/components/PerfilModal'
@@ -12,6 +13,7 @@ import {
   Award,
   BookOpen,
   LogOut,
+  MapPin,
   Plus,
   ScanBarcode,
   UserCircle2,
@@ -21,6 +23,7 @@ import {
 interface LibroEstanteria {
   id: string
   estado: string
+  visible_local?: boolean
   libros_catalogo: {
     isbn: string
     titulo: string
@@ -36,7 +39,7 @@ export default function Home() {
   const [user, setUser] = useState<any>(null)
   const [aliasUsuario, setAliasUsuario] = useState<string>('')
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'estanteria' | 'clubes' | 'prestamos'>('estanteria')
+  const [tab, setTab] = useState<'estanteria' | 'clubes' | 'barrio' | 'prestamos'>('estanteria')
   const [misLibros, setMisLibros] = useState<LibroEstanteria[]>([])
   const [pendientesCount, setPendientesCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
@@ -76,7 +79,7 @@ export default function Home() {
     async (uid: string) => {
       const { data: ejemplaresData, error: ejError } = await supabase
         .from('ejemplares')
-        .select('id, isbn, estado')
+        .select('id, isbn, estado, visible_local')
         .eq('propietario_id', uid)
 
       if (!ejError && ejemplaresData) {
@@ -92,6 +95,7 @@ export default function Home() {
           const combinados = ejemplaresData.map((ej) => ({
             id: ej.id,
             estado: ej.estado,
+            visible_local: Boolean(ej.visible_local),
             libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
               isbn: ej.isbn,
               titulo: `ISBN: ${ej.isbn}`,
@@ -163,7 +167,7 @@ export default function Home() {
           </div>
           <h1 className="text-2xl font-bold text-stone-900 mb-2">Exlibris</h1>
           <p className="text-stone-600 text-sm mb-8">
-            Tu estantería digital compartida. Escanea tus libros físicos, únete a clubes de lectura y presta ejemplares a tus amigos.
+            Tu estantería digital compartida. Escanea tus libros físicos, únete a clubes de lectura y presta ejemplares a tus amigos o vecinos.
           </p>
           <button
             onClick={handleLogin}
@@ -274,14 +278,24 @@ export default function Home() {
                         </div>
                       )}
 
-                      {item.libros_catalogo?.premios && (
-                        <span
-                          title={item.libros_catalogo.premios}
-                          className="absolute top-2 left-2 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-sm"
-                        >
-                          <Award className="w-3 h-3" />
-                        </span>
-                      )}
+                      <div className="absolute top-2 left-2 flex flex-col gap-1">
+                        {item.libros_catalogo?.premios && (
+                          <span
+                            title={item.libros_catalogo.premios}
+                            className="bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-sm"
+                          >
+                            <Award className="w-3 h-3" />
+                          </span>
+                        )}
+                        {item.visible_local && (
+                          <span
+                            title="Visible de forma anónima en tu código postal"
+                            className="bg-sky-600/95 text-white p-1 rounded-full shadow-sm"
+                          >
+                            <MapPin className="w-3 h-3" />
+                          </span>
+                        )}
+                      </div>
 
                       <span
                         className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm ${
@@ -320,13 +334,21 @@ export default function Home() {
           <ClubesTab userId={user.id} onSolicitado={() => cargarDatos(user.id)} />
         )}
 
+        {tab === 'barrio' && (
+          <ExplorarLocalTab
+            userId={user.id}
+            onAbrirPerfil={() => setShowPerfil(true)}
+            onSolicitado={() => cargarDatos(user.id)}
+          />
+        )}
+
         {tab === 'prestamos' && (
           <PrestamosTab userId={user.id} onCambioEstado={() => cargarDatos(user.id)} />
         )}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-200 z-20">
-        <div className="max-w-3xl mx-auto grid grid-cols-3 h-16">
+        <div className="max-w-3xl mx-auto grid grid-cols-4 h-16">
           <button
             onClick={() => setTab('estanteria')}
             className={`flex flex-col items-center justify-center gap-1 text-[11px] font-medium cursor-pointer ${
@@ -345,6 +367,16 @@ export default function Home() {
           >
             <Users className="w-5 h-5" />
             <span>Clubes</span>
+          </button>
+
+          <button
+            onClick={() => setTab('barrio')}
+            className={`flex flex-col items-center justify-center gap-1 text-[11px] font-medium cursor-pointer ${
+              tab === 'barrio' ? 'text-emerald-700' : 'text-stone-500 hover:text-stone-800'
+            }`}
+          >
+            <MapPin className="w-5 h-5" />
+            <span>Barrio</span>
           </button>
 
           <button
