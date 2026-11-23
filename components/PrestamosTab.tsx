@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { comprimirImagen } from '@/utils/comprimirImagen'
 import {
   ArrowDownLeft,
   ArrowUpRight,
   BookOpen,
+  Camera,
   Check,
   Clock,
+  Image as ImageIcon,
   Loader2,
   MessageCircle,
   RotateCcw,
@@ -25,6 +28,8 @@ interface PrestamoItem {
   fecha_solicitud: string
   fecha_entrega: string | null
   fecha_devolucion_real: string | null
+  foto_entrega_url: string | null
+  foto_devolucion_url: string | null
   titulo: string
   autor: string
   portada_url: string
@@ -54,6 +59,10 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [procesandoId, setProcesandoId] = useState<string | null>(null)
   const [filtroVista, setFiltroVista] = useState<'activos' | 'historial'>('activos')
 
+  // Estado de subida de fotos y visor ampliado
+  const [subiendoFotoKey, setSubiendoFotoKey] = useState<string | null>(null)
+  const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
+
   // Estado del chat por préstamo
   const [chatAbiertoId, setChatAbiertoId] = useState<string | null>(null)
   const [mensajes, setMensajes] = useState<MensajeChat[]>([])
@@ -68,7 +77,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     const { data: prestamosData, error } = await supabase
       .from('prestamos')
       .select(
-        'id, ejemplar_id, propietario_id, lector_id, club_id, estado, fecha_solicitud, fecha_entrega, fecha_devolucion_real'
+        'id, ejemplar_id, propietario_id, lector_id, club_id, estado, fecha_solicitud, fecha_entrega, fecha_devolucion_real, foto_entrega_url, foto_devolucion_url'
       )
       .or(`propietario_id.eq.${userId},lector_id.eq.${userId}`)
       .order('fecha_solicitud', { ascending: false })
@@ -130,6 +139,8 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         fecha_solicitud: p.fecha_solicitud,
         fecha_entrega: p.fecha_entrega,
         fecha_devolucion_real: p.fecha_devolucion_real,
+        foto_entrega_url: p.foto_entrega_url || null,
+        foto_devolucion_url: p.foto_devolucion_url || null,
         titulo: libro?.titulo || 'Libro sin título',
         autor: libro?.autor || 'Autor desconocido',
         portada_url: libro?.portada_url || '',
@@ -202,6 +213,48 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   useEffect(() => {
     mensajesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [mensajes])
+
+  const subirFotoEstado = async (
+    prestamoId: string,
+    tipo: 'entrega' | 'devolucion',
+    file: File
+  ) => {
+    const key = `${prestamoId}-${tipo}`
+    setSubiendoFotoKey(key)
+
+    try {
+      const imagenComprimida = await comprimirImagen(file)
+      const rutaArchivo = `${prestamoId}/${tipo}_${Date.now()}.jpg`
+
+      const { error: uploadError } = await supabase.storage
+        .from('estados-libros')
+        .upload(rutaArchivo, imagenComprimida, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        })
+
+      if (uploadError) throw uploadError
+
+      const { data: publicUrlData } = supabase.storage
+        .from('estados-libros')
+        .getPublicUrl(rutaArchivo)
+
+      const columna = tipo === 'entrega' ? 'foto_entrega_url' : 'foto_devolucion_url'
+
+      const { error: dbError } = await supabase
+        .from('prestamos')
+        .update({ [columna]: publicUrlData.publicUrl })
+        .eq('id', prestamoId)
+
+      if (dbError) throw dbError
+
+      await cargarPrestamos()
+    } catch (err: any) {
+      alert(`No se pudo subir la foto: ${err.message || 'Error desconocido'}`)
+    } finally {
+      setSubiendoFotoKey(null)
+    }
+  }
 
   const enviarMensaje = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -335,7 +388,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         <div>
           <h1 className="text-lg font-bold text-stone-900">Préstamos</h1>
           <p className="text-xs text-stone-500">
-            Gestiona entregas, devoluciones y coordina quedadas por chat
+            Gestiona entregas, fotos de estado y coordina quedadas por chat
           </p>
         </div>
 
@@ -374,7 +427,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
               : 'Aún no hay préstamos cerrados en tu historial'}
           </h2>
           <p className="text-xs text-stone-500 max-w-xs mx-auto">
-            Cuando pidas un libro en alguno de tus clubes o alguien te solicite uno de los tuyos, aparecerá aquí con su chat privado.
+            Cuando pidas un libro en alguno de tus clubes o alguien te solicite uno de los tuyos, aparecerá aquí con su chat y acta fotográfica.
           </p>
         </div>
       ) : (
@@ -382,6 +435,12 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
           {prestamosFiltrados.map((item) => {
             const chatAbierto = chatAbiertoId === item.id
             const estaProcesando = procesandoId === item.id
+            const mostrarActaFotos =
+              item.estado === 'activo' ||
+              item.estado === 'en_curso' ||
+              item.estado === 'devuelto' ||
+              Boolean(item.foto_entrega_url) ||
+              Boolean(item.foto_devolucion_url)
 
             return (
               <div
@@ -463,12 +522,9 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
 
                     {/* Botones de acción según rol y estado */}
                     <div className="pt-1.5 flex flex-wrap items-center gap-2">
-                      {/* Chat privado siempre disponible para coordinar entrega o comentar lectura */}
                       <button
                         type="button"
-                        onClick={() =>
-                          setChatAbiertoId(chatAbierto ? null : item.id)
-                        }
+                        onClick={() => setChatAbiertoId(chatAbierto ? null : item.id)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                           chatAbierto
                             ? 'bg-stone-900 text-white'
@@ -479,7 +535,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         <span>{chatAbierto ? 'Cerrar chat' : 'Chat quedada / novela'}</span>
                       </button>
 
-                      {/* Acciones del PROPIETARIO cuando está solicitado */}
                       {item.es_propietario && item.estado === 'solicitado' && (
                         <>
                           <button
@@ -503,7 +558,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         </>
                       )}
 
-                      {/* Acción del LECTOR cuando aún está solicitado */}
                       {!item.es_propietario && item.estado === 'solicitado' && (
                         <button
                           type="button"
@@ -516,7 +570,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         </button>
                       )}
 
-                      {/* Acción del PROPIETARIO cuando ya está prestado */}
                       {item.es_propietario &&
                         (item.estado === 'activo' || item.estado === 'en_curso') && (
                           <button
@@ -532,6 +585,132 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                     </div>
                   </div>
                 </div>
+
+                {/* Acta fotográfica del estado del ejemplar (Entrega y Devolución) */}
+                {mostrarActaFotos && (
+                  <div className="border-t border-stone-100 bg-stone-50/70 px-4 py-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2 flex items-center gap-1.5">
+                      <ImageIcon className="w-3 h-3" />
+                      <span>Estado físico del ejemplar</span>
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {/* Foto de entrega */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
+                        {item.foto_entrega_url ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFotoAmpliada({
+                                url: item.foto_entrega_url!,
+                                titulo: `Estado en la entrega · ${item.titulo}`,
+                              })
+                            }
+                            className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
+                          >
+                            <img
+                              src={item.foto_entrega_url}
+                              alt="Estado entrega"
+                              className="w-10 h-10 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-semibold text-stone-800 truncate">
+                                Foto entrega
+                              </p>
+                              <p className="text-[10px] text-emerald-700">Ver ampliada</p>
+                            </div>
+                          </button>
+                        ) : (
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold text-stone-700">
+                              Entrega
+                            </p>
+                            <p className="text-[10px] text-stone-400">Sin foto aún</p>
+                          </div>
+                        )}
+
+                        {item.estado !== 'devuelto' && (
+                          <label className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
+                            {subiendoFotoKey === `${item.id}-entrega` ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Camera className="w-3.5 h-3.5" />
+                            )}
+                            <span>{item.foto_entrega_url ? 'Cambiar' : 'Subir'}</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              disabled={subiendoFotoKey !== null}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                if (file) subirFotoEstado(item.id, 'entrega', file)
+                                e.target.value = ''
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+
+                      {/* Foto de devolución */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
+                        {item.foto_devolucion_url ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFotoAmpliada({
+                                url: item.foto_devolucion_url!,
+                                titulo: `Estado en la devolución · ${item.titulo}`,
+                              })
+                            }
+                            className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
+                          >
+                            <img
+                              src={item.foto_devolucion_url}
+                              alt="Estado devolución"
+                              className="w-10 h-10 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-semibold text-stone-800 truncate">
+                                Foto devolución
+                              </p>
+                              <p className="text-[10px] text-emerald-700">Ver ampliada</p>
+                            </div>
+                          </button>
+                        ) : (
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold text-stone-700">
+                              Devolución
+                            </p>
+                            <p className="text-[10px] text-stone-400">Sin foto aún</p>
+                          </div>
+                        )}
+
+                        <label className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
+                          {subiendoFotoKey === `${item.id}-devolucion` ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Camera className="w-3.5 h-3.5" />
+                          )}
+                          <span>{item.foto_devolucion_url ? 'Cambiar' : 'Subir'}</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            disabled={subiendoFotoKey !== null}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0]
+                              if (file) subirFotoEstado(item.id, 'devolucion', file)
+                              e.target.value = ''
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Panel desplegable de Chat en tiempo real */}
                 {chatAbierto && (
@@ -613,6 +792,39 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Visor ampliado de foto (Lightbox) */}
+      {fotoAmpliada && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <div
+            className="max-w-lg w-full bg-stone-900 rounded-2xl overflow-hidden shadow-2xl border border-stone-700"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 flex items-center justify-between border-b border-stone-800">
+              <p className="text-xs font-semibold text-stone-200 truncate">
+                {fotoAmpliada.titulo}
+              </p>
+              <button
+                type="button"
+                onClick={() => setFotoAmpliada(null)}
+                className="p-1 text-stone-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="bg-black flex items-center justify-center max-h-[75vh]">
+              <img
+                src={fotoAmpliada.url}
+                alt={fotoAmpliada.titulo}
+                className="max-h-[75vh] w-auto object-contain"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
