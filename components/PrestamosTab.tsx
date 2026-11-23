@@ -1,227 +1,620 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
-import { ArrowDownLeft, ArrowUpRight, Check, Loader2, RotateCcw, X } from 'lucide-react'
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  BookOpen,
+  Check,
+  Clock,
+  Loader2,
+  MessageCircle,
+  RotateCcw,
+  Send,
+  X,
+} from 'lucide-react'
 
 interface PrestamoItem {
   id: string
   ejemplar_id: string
   propietario_id: string
-  solicitante_id: string
-  estado: 'solicitado' | 'activo' | 'devuelto' | 'rechazado'
+  lector_id: string
+  club_id: string | null
+  estado: string
+  fecha_solicitud: string
+  fecha_entrega: string | null
+  fecha_devolucion_real: string | null
   titulo: string
+  autor: string
   portada_url: string
-  otra_persona: string
+  isbn: string
+  otro_usuario_nombre: string
+  club_nombre: string | null
+  es_propietario: boolean
 }
 
-export default function PrestamosTab({
-  userId,
-  onCambioEstado,
-}: {
+interface MensajeChat {
+  id: string
+  prestamo_id: string
+  remitente_id: string
+  contenido: string
+  creado_en: string
+}
+
+interface PrestamosTabProps {
   userId: string
   onCambioEstado: () => void
-}) {
-  const [recibidos, setRecibidos] = useState<PrestamoItem[]>([])
-  const [enviados, setEnviados] = useState<PrestamoItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [procesandoId, setProcesandoId] = useState<string | null>(null)
+}
 
+export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabProps) {
   const supabase = createClient()
+  const [prestamos, setPrestamos] = useState<PrestamoItem[]>([])
+  const [cargando, setCargando] = useState(true)
+  const [procesandoId, setProcesandoId] = useState<string | null>(null)
+  const [filtroVista, setFiltroVista] = useState<'activos' | 'historial'>('activos')
+
+  // Estado del chat por préstamo
+  const [chatAbiertoId, setChatAbiertoId] = useState<string | null>(null)
+  const [mensajes, setMensajes] = useState<MensajeChat[]>([])
+  const [cargandoChat, setCargandoChat] = useState(false)
+  const [nuevoMensaje, setNuevoMensaje] = useState('')
+  const [enviandoMensaje, setEnviandoMensaje] = useState(false)
+  const mensajesEndRef = useRef<HTMLDivElement | null>(null)
 
   const cargarPrestamos = useCallback(async () => {
-    setLoading(true)
-    const { data: prestamos } = await supabase
+    setCargando(true)
+
+    const { data: prestamosData, error } = await supabase
       .from('prestamos')
-      .select('*')
-      .or(`propietario_id.eq.${userId},solicitante_id.eq.${userId}`)
+      .select(
+        'id, ejemplar_id, propietario_id, lector_id, club_id, estado, fecha_solicitud, fecha_entrega, fecha_devolucion_real'
+      )
+      .or(`propietario_id.eq.${userId},lector_id.eq.${userId}`)
       .order('fecha_solicitud', { ascending: false })
 
-    if (!prestamos || prestamos.length === 0) {
-      setRecibidos([])
-      setEnviados([])
-      setLoading(false)
+    if (error || !prestamosData || prestamosData.length === 0) {
+      setPrestamos([])
+      setCargando(false)
       return
     }
 
-    const ejemplarIds = Array.from(new Set(prestamos.map((p) => p.ejemplar_id)))
-    const userIds = Array.from(
-      new Set(prestamos.flatMap((p) => [p.propietario_id, p.solicitante_id]))
+    const ejemplarIds = Array.from(new Set(prestamosData.map((p) => p.ejemplar_id)))
+    const otroUserIds = Array.from(
+      new Set(
+        prestamosData.map((p) =>
+          p.propietario_id === userId ? p.lector_id : p.propietario_id
+        )
+      )
+    )
+    const clubIds = Array.from(
+      new Set(prestamosData.map((p) => p.club_id).filter(Boolean) as string[])
     )
 
-    const [{ data: ejemplares }, { data: perfiles }] = await Promise.all([
-      supabase.from('ejemplares').select('id, isbn').in('id', ejemplarIds),
-      supabase.from('perfiles').select('id, nombre').in('id', userIds),
-    ])
+    const [{ data: ejemplaresData }, { data: perfilesData }, { data: clubesData }] =
+      await Promise.all([
+        supabase.from('ejemplares').select('id, isbn').in('id', ejemplarIds),
+        supabase.from('perfiles').select('id, nombre, nombre_usuario').in('id', otroUserIds),
+        clubIds.length > 0
+          ? supabase.from('clubes').select('id, nombre').in('id', clubIds)
+          : Promise.resolve({ data: [] as { id: string; nombre: string }[] }),
+      ])
 
-    const isbns = Array.from(new Set((ejemplares || []).map((e) => e.isbn)))
-    const { data: catalogo } = await supabase
-      .from('libros_catalogo')
-      .select('isbn, titulo, portada_url')
-      .in('isbn', isbns)
+    const isbns = Array.from(
+      new Set((ejemplaresData || []).map((e) => e.isbn).filter(Boolean))
+    )
 
-    const formateados: PrestamoItem[] = prestamos.map((p) => {
-      const ej = ejemplares?.find((e) => e.id === p.ejemplar_id)
-      const libro = catalogo?.find((c) => c.isbn === ej?.isbn)
-      const otroId = p.propietario_id === userId ? p.solicitante_id : p.propietario_id
-      const otroPerfil = perfiles?.find((pf) => pf.id === otroId)
+    const { data: catalogoData } =
+      isbns.length > 0
+        ? await supabase
+            .from('libros_catalogo')
+            .select('isbn, titulo, autor, portada_url')
+            .in('isbn', isbns)
+        : { data: [] }
+
+    const combinados: PrestamoItem[] = prestamosData.map((p) => {
+      const esPropietario = p.propietario_id === userId
+      const otroId = esPropietario ? p.lector_id : p.propietario_id
+      const perfil = perfilesData?.find((u) => u.id === otroId)
+      const ejemplar = ejemplaresData?.find((e) => e.id === p.ejemplar_id)
+      const libro = catalogoData?.find((c) => c.isbn === ejemplar?.isbn)
+      const club = clubesData?.find((c) => c.id === p.club_id)
 
       return {
         id: p.id,
         ejemplar_id: p.ejemplar_id,
         propietario_id: p.propietario_id,
-        solicitante_id: p.solicitante_id,
+        lector_id: p.lector_id,
+        club_id: p.club_id,
         estado: p.estado,
-        titulo: libro?.titulo || 'Libro',
+        fecha_solicitud: p.fecha_solicitud,
+        fecha_entrega: p.fecha_entrega,
+        fecha_devolucion_real: p.fecha_devolucion_real,
+        titulo: libro?.titulo || 'Libro sin título',
+        autor: libro?.autor || 'Autor desconocido',
         portada_url: libro?.portada_url || '',
-        otra_persona: otroPerfil?.nombre || 'Miembro del club',
+        isbn: ejemplar?.isbn || '',
+        otro_usuario_nombre:
+          perfil?.nombre || perfil?.nombre_usuario || `Usuario #${otroId.slice(0, 4)}`,
+        club_nombre: club?.nombre || null,
+        es_propietario: esPropietario,
       }
     })
 
-    setRecibidos(formateados.filter((p) => p.propietario_id === userId))
-    setEnviados(formateados.filter((p) => p.solicitante_id === userId))
-    setLoading(false)
+    setPrestamos(combinados)
+    setCargando(false)
   }, [supabase, userId])
 
   useEffect(() => {
     cargarPrestamos()
   }, [cargarPrestamos])
 
-  const actualizarPrestamo = async (
-    item: PrestamoItem,
-    nuevoEstado: 'activo' | 'rechazado' | 'devuelto'
-  ) => {
+  // Suscripción en tiempo real al chat abierto
+  useEffect(() => {
+    if (!chatAbiertoId) {
+      setMensajes([])
+      return
+    }
+
+    let activo = true
+
+    const cargarMensajes = async () => {
+      setCargandoChat(true)
+      const { data } = await supabase
+        .from('mensajes_prestamo')
+        .select('id, prestamo_id, remitente_id, contenido, creado_en')
+        .eq('prestamo_id', chatAbiertoId)
+        .order('creado_en', { ascending: true })
+
+      if (activo) {
+        setMensajes(data || [])
+        setCargandoChat(false)
+      }
+    }
+
+    cargarMensajes()
+
+    const channel = supabase
+      .channel(`chat-prestamo-${chatAbiertoId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'mensajes_prestamo',
+          filter: `prestamo_id=eq.${chatAbiertoId}`,
+        },
+        (payload) => {
+          const nuevo = payload.new as MensajeChat
+          setMensajes((prev) =>
+            prev.some((m) => m.id === nuevo.id) ? prev : [...prev, nuevo]
+          )
+        }
+      )
+      .subscribe()
+
+    return () => {
+      activo = false
+      supabase.removeChannel(channel)
+    }
+  }, [chatAbiertoId, supabase])
+
+  useEffect(() => {
+    mensajesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [mensajes])
+
+  const enviarMensaje = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!chatAbiertoId || !nuevoMensaje.trim() || enviandoMensaje) return
+
+    const texto = nuevoMensaje.trim()
+    setNuevoMensaje('')
+    setEnviandoMensaje(true)
+
+    const { data, error } = await supabase
+      .from('mensajes_prestamo')
+      .insert({
+        prestamo_id: chatAbiertoId,
+        remitente_id: userId,
+        contenido: texto,
+      })
+      .select()
+      .single()
+
+    setEnviandoMensaje(false)
+
+    if (error) {
+      alert(`No se pudo enviar el mensaje: ${error.message}`)
+      setNuevoMensaje(texto)
+    } else if (data) {
+      setMensajes((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]))
+    }
+  }
+
+  const aceptarPrestamo = async (item: PrestamoItem) => {
+    if (!item.es_propietario || procesandoId) return
     setProcesandoId(item.id)
 
-    const updates: Record<string, any> = { estado: nuevoEstado }
-    if (nuevoEstado === 'activo') updates.fecha_inicio = new Date().toISOString()
-    if (nuevoEstado === 'devuelto') updates.fecha_devolucion = new Date().toISOString()
-
-    await supabase.from('prestamos').update(updates).eq('id', item.id)
-
-    // Sincronizar disponibilidad en la estantería del propietario
-    if (nuevoEstado === 'activo') {
-      await supabase.from('ejemplares').update({ estado: 'prestado' }).eq('id', item.ejemplar_id)
-    } else if (nuevoEstado === 'devuelto') {
-      await supabase.from('ejemplares').update({ estado: 'disponible' }).eq('id', item.ejemplar_id)
-    }
+    const [{ error: pErr }, { error: eErr }] = await Promise.all([
+      supabase
+        .from('prestamos')
+        .update({
+          estado: 'activo',
+          fecha_entrega: new Date().toISOString(),
+        })
+        .eq('id', item.id),
+      supabase
+        .from('ejemplares')
+        .update({ estado: 'prestado' })
+        .eq('id', item.ejemplar_id),
+    ])
 
     setProcesandoId(null)
-    await cargarPrestamos()
-    onCambioEstado()
-  }
-
-  const badgeEstado = (estado: PrestamoItem['estado']) => {
-    switch (estado) {
-      case 'solicitado':
-        return <span className="text-[11px] font-semibold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-md">Pendiente</span>
-      case 'activo':
-        return <span className="text-[11px] font-semibold bg-blue-100 text-blue-800 px-2 py-0.5 rounded-md">En préstamo</span>
-      case 'devuelto':
-        return <span className="text-[11px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md">Devuelto</span>
-      case 'rechazado':
-        return <span className="text-[11px] font-semibold bg-stone-200 text-stone-600 px-2 py-0.5 rounded-md">Rechazado</span>
+    if (pErr || eErr) {
+      alert(`Error al aceptar préstamo: ${pErr?.message || eErr?.message}`)
+    } else {
+      await cargarPrestamos()
+      onCambioEstado()
     }
   }
 
-  if (loading) {
+  const rechazarOCancelar = async (item: PrestamoItem, nuevoEstado: 'rechazado' | 'cancelado') => {
+    if (procesandoId) return
+    setProcesandoId(item.id)
+
+    const { error } = await supabase
+      .from('prestamos')
+      .update({ estado: nuevoEstado })
+      .eq('id', item.id)
+
+    setProcesandoId(null)
+    if (error) {
+      alert(`Error al actualizar solicitud: ${error.message}`)
+    } else {
+      await cargarPrestamos()
+      onCambioEstado()
+    }
+  }
+
+  const marcarDevuelto = async (item: PrestamoItem) => {
+    if (!item.es_propietario || procesandoId) return
+    setProcesandoId(item.id)
+
+    const [{ error: pErr }, { error: eErr }] = await Promise.all([
+      supabase
+        .from('prestamos')
+        .update({
+          estado: 'devuelto',
+          fecha_devolucion_real: new Date().toISOString(),
+        })
+        .eq('id', item.id),
+      supabase
+        .from('ejemplares')
+        .update({ estado: 'disponible' })
+        .eq('id', item.ejemplar_id),
+    ])
+
+    setProcesandoId(null)
+    if (pErr || eErr) {
+      alert(`Error al registrar devolución: ${pErr?.message || eErr?.message}`)
+    } else {
+      await cargarPrestamos()
+      onCambioEstado()
+    }
+  }
+
+  const prestamosFiltrados = prestamos.filter((p) =>
+    filtroVista === 'activos'
+      ? p.estado === 'solicitado' || p.estado === 'activo' || p.estado === 'en_curso'
+      : p.estado === 'devuelto' || p.estado === 'rechazado' || p.estado === 'cancelado'
+  )
+
+  const formatearHora = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString('es-ES', {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    } catch {
+      return ''
+    }
+  }
+
+  if (cargando) {
     return (
-      <div className="py-12 flex justify-center">
-        <Loader2 className="w-7 h-7 text-emerald-700 animate-spin" />
+      <div className="py-12 text-center text-xs text-stone-500">
+        Cargando movimientos y préstamos...
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      {/* Peticiones sobre MIS libros */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1.5">
-          <ArrowDownLeft className="w-4 h-4 text-emerald-700" />
-          Libros que me han pedido ({recibidos.length})
-        </h2>
-
-        {recibidos.length === 0 ? (
-          <p className="text-xs text-stone-500 bg-white p-4 rounded-2xl border border-stone-200">
-            Nadie ha solicitado ninguno de tus libros todavía.
+    <div className="space-y-5">
+      {/* Cabecera y selector Activos / Historial */}
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h1 className="text-lg font-bold text-stone-900">Préstamos</h1>
+          <p className="text-xs text-stone-500">
+            Gestiona entregas, devoluciones y coordina quedadas por chat
           </p>
-        ) : (
-          recibidos.map((item) => (
-            <div key={item.id} className="bg-white p-3.5 rounded-2xl border border-stone-200 space-y-3 shadow-sm">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="font-bold text-sm text-stone-900 line-clamp-1">{item.titulo}</p>
-                  <p className="text-xs text-stone-500">
-                    Solicitado por <strong>{item.otra_persona}</strong>
-                  </p>
-                </div>
-                {badgeEstado(item.estado)}
-              </div>
+        </div>
 
-              {item.estado === 'solicitado' && (
-                <div className="flex gap-2 pt-1">
-                  <button
-                    disabled={procesandoId === item.id}
-                    onClick={() => actualizarPrestamo(item, 'rechazado')}
-                    className="flex-1 py-1.5 border border-stone-300 text-stone-700 rounded-xl text-xs font-medium flex items-center justify-center gap-1 hover:bg-stone-50 cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                    Rechazar
-                  </button>
-                  <button
-                    disabled={procesandoId === item.id}
-                    onClick={() => actualizarPrestamo(item, 'activo')}
-                    className="flex-1 py-1.5 bg-emerald-700 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1 hover:bg-emerald-800 cursor-pointer"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    Prestar libro
-                  </button>
-                </div>
-              )}
+        <div className="flex bg-stone-200/70 p-1 rounded-xl text-xs font-semibold">
+          <button
+            type="button"
+            onClick={() => setFiltroVista('activos')}
+            className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+              filtroVista === 'activos'
+                ? 'bg-white text-stone-900 shadow-xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            En curso
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltroVista('historial')}
+            className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+              filtroVista === 'historial'
+                ? 'bg-white text-stone-900 shadow-xs'
+                : 'text-stone-600 hover:text-stone-900'
+            }`}
+          >
+            Historial
+          </button>
+        </div>
+      </div>
 
-              {item.estado === 'activo' && (
-                <button
-                  disabled={procesandoId === item.id}
-                  onClick={() => actualizarPrestamo(item, 'devuelto')}
-                  className="w-full py-1.5 bg-stone-900 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-stone-800 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  Confirmar que me lo han devuelto
-                </button>
-              )}
-            </div>
-          ))
-        )}
-      </section>
-
-      {/* Libros que YO he pedido */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1.5">
-          <ArrowUpRight className="w-4 h-4 text-blue-700" />
-          Libros que he pedido ({enviados.length})
-        </h2>
-
-        {enviados.length === 0 ? (
-          <p className="text-xs text-stone-500 bg-white p-4 rounded-2xl border border-stone-200">
-            No has pedido ningún libro a tus clubes todavía.
+      {prestamosFiltrados.length === 0 ? (
+        <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
+          <BookOpen className="w-10 h-10 text-stone-300 mx-auto mb-3" />
+          <h2 className="font-semibold text-stone-800 mb-1 text-sm">
+            {filtroVista === 'activos'
+              ? 'No tienes préstamos activos ni solicitudes pendientes'
+              : 'Aún no hay préstamos cerrados en tu historial'}
+          </h2>
+          <p className="text-xs text-stone-500 max-w-xs mx-auto">
+            Cuando pidas un libro en alguno de tus clubes o alguien te solicite uno de los tuyos, aparecerá aquí con su chat privado.
           </p>
-        ) : (
-          enviados.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white p-3.5 rounded-2xl border border-stone-200 flex items-center justify-between gap-3 shadow-sm"
-            >
-              <div className="min-w-0">
-                <p className="font-bold text-sm text-stone-900 line-clamp-1">{item.titulo}</p>
-                <p className="text-xs text-stone-500">
-                  Propietario: <strong>{item.otra_persona}</strong>
-                </p>
+        </div>
+      ) : (
+        <div className="space-y-3.5">
+          {prestamosFiltrados.map((item) => {
+            const chatAbierto = chatAbiertoId === item.id
+            const estaProcesando = procesandoId === item.id
+
+            return (
+              <div
+                key={item.id}
+                className="bg-white rounded-2xl border border-stone-200 shadow-xs overflow-hidden"
+              >
+                <div className="p-4 flex gap-3.5">
+                  {/* Portada */}
+                  <div className="w-16 aspect-[2/3] bg-stone-100 rounded-lg overflow-hidden shrink-0 border border-stone-200">
+                    {item.portada_url ? (
+                      <img
+                        src={item.portada_url}
+                        alt={item.titulo}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-stone-400">
+                        <BookOpen className="w-5 h-5" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Datos del préstamo */}
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                          item.es_propietario
+                            ? 'bg-amber-100/80 text-amber-900'
+                            : 'bg-sky-100/80 text-sky-900'
+                        }`}
+                      >
+                        {item.es_propietario ? (
+                          <>
+                            <ArrowUpRight className="w-3 h-3" />
+                            <span>Prestas a {item.otro_usuario_nombre}</span>
+                          </>
+                        ) : (
+                          <>
+                            <ArrowDownLeft className="w-3 h-3" />
+                            <span>Pides a {item.otro_usuario_nombre}</span>
+                          </>
+                        )}
+                      </span>
+
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                          item.estado === 'solicitado'
+                            ? 'bg-amber-100 text-amber-800'
+                            : item.estado === 'activo' || item.estado === 'en_curso'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : item.estado === 'devuelto'
+                            ? 'bg-stone-100 text-stone-700'
+                            : 'bg-red-100 text-red-700'
+                        }`}
+                      >
+                        {item.estado === 'solicitado'
+                          ? 'Solicitado'
+                          : item.estado === 'activo' || item.estado === 'en_curso'
+                          ? 'En préstamo'
+                          : item.estado === 'devuelto'
+                          ? 'Devuelto'
+                          : item.estado === 'rechazado'
+                          ? 'Rechazado'
+                          : 'Cancelado'}
+                      </span>
+                    </div>
+
+                    <h3 className="font-bold text-stone-900 text-sm leading-snug line-clamp-1">
+                      {item.titulo}
+                    </h3>
+                    <p className="text-xs text-stone-500 line-clamp-1">{item.autor}</p>
+
+                    {item.club_nombre && (
+                      <p className="text-[11px] text-stone-400">
+                        Club: <strong className="text-stone-600">{item.club_nombre}</strong>
+                      </p>
+                    )}
+
+                    {/* Botones de acción según rol y estado */}
+                    <div className="pt-1.5 flex flex-wrap items-center gap-2">
+                      {/* Chat privado siempre disponible para coordinar entrega o comentar lectura */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setChatAbiertoId(chatAbierto ? null : item.id)
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                          chatAbierto
+                            ? 'bg-stone-900 text-white'
+                            : 'bg-stone-100 hover:bg-stone-200 text-stone-800'
+                        }`}
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>{chatAbierto ? 'Cerrar chat' : 'Chat quedada / novela'}</span>
+                      </button>
+
+                      {/* Acciones del PROPIETARIO cuando está solicitado */}
+                      {item.es_propietario && item.estado === 'solicitado' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => aceptarPrestamo(item)}
+                            disabled={estaProcesando}
+                            className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Aceptar</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => rechazarOCancelar(item, 'rechazado')}
+                            disabled={estaProcesando}
+                            className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Rechazar</span>
+                          </button>
+                        </>
+                      )}
+
+                      {/* Acción del LECTOR cuando aún está solicitado */}
+                      {!item.es_propietario && item.estado === 'solicitado' && (
+                        <button
+                          type="button"
+                          onClick={() => rechazarOCancelar(item, 'cancelado')}
+                          disabled={estaProcesando}
+                          className="px-2.5 py-1.5 text-stone-500 hover:text-red-700 hover:bg-red-50 rounded-lg text-xs font-medium flex items-center gap-1 cursor-pointer"
+                        >
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Cancelar solicitud</span>
+                        </button>
+                      )}
+
+                      {/* Acción del PROPIETARIO cuando ya está prestado */}
+                      {item.es_propietario &&
+                        (item.estado === 'activo' || item.estado === 'en_curso') && (
+                          <button
+                            type="button"
+                            onClick={() => marcarDevuelto(item)}
+                            disabled={estaProcesando}
+                            className="px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Marcar como devuelto</span>
+                          </button>
+                        )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Panel desplegable de Chat en tiempo real */}
+                {chatAbierto && (
+                  <div className="border-t border-stone-200 bg-stone-50 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-stone-500">
+                        Chat privado con {item.otro_usuario_nombre}
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-medium">
+                        ● En tiempo real
+                      </span>
+                    </div>
+
+                    <div className="bg-white border border-stone-200 rounded-xl p-3 h-56 overflow-y-auto space-y-2.5">
+                      {cargandoChat ? (
+                        <div className="h-full flex items-center justify-center text-xs text-stone-400">
+                          <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                          Cargando mensajes...
+                        </div>
+                      ) : mensajes.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center px-4">
+                          <p className="text-xs text-stone-500 font-medium">
+                            Aún no hay mensajes en este intercambio
+                          </p>
+                          <p className="text-[11px] text-stone-400 mt-1">
+                            Escribe para acordar dónde y cuándo quedar, o para comentar qué te está pareciendo el libro.
+                          </p>
+                        </div>
+                      ) : (
+                        mensajes.map((msg) => {
+                          const esMio = msg.remitente_id === userId
+                          return (
+                            <div
+                              key={msg.id}
+                              className={`flex flex-col ${
+                                esMio ? 'items-end' : 'items-start'
+                              }`}
+                            >
+                              <div
+                                className={`max-w-[82%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${
+                                  esMio
+                                    ? 'bg-emerald-700 text-white rounded-br-xs'
+                                    : 'bg-stone-100 text-stone-800 rounded-bl-xs'
+                                }`}
+                              >
+                                <p className="whitespace-pre-line">{msg.contenido}</p>
+                              </div>
+                              <span className="text-[10px] text-stone-400 mt-0.5 px-1">
+                                {esMio ? 'Tú' : item.otro_usuario_nombre} ·{' '}
+                                {formatearHora(msg.creado_en)}
+                              </span>
+                            </div>
+                          )
+                        })
+                      )}
+                      <div ref={mensajesEndRef} />
+                    </div>
+
+                    <form onSubmit={enviarMensaje} className="flex gap-2">
+                      <input
+                        type="text"
+                        maxLength={1000}
+                        value={nuevoMensaje}
+                        onChange={(e) => setNuevoMensaje(e.target.value)}
+                        placeholder="Ej. ¿Quedamos mañana a las 19:00 en la plaza?"
+                        className="flex-1 px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+                      />
+                      <button
+                        type="submit"
+                        disabled={enviandoMensaje || !nuevoMensaje.trim()}
+                        className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Enviar</span>
+                      </button>
+                    </form>
+                  </div>
+                )}
               </div>
-              {badgeEstado(item.estado)}
-            </div>
-          ))
-        )}
-      </section>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
