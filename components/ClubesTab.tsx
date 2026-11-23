@@ -21,7 +21,7 @@ interface Club {
   id: string
   nombre: string
   codigo_invitacion: string
-  creador_id: string
+  creado_por: string
 }
 
 interface EjemplarClub {
@@ -71,7 +71,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const cargarMisClubes = useCallback(async () => {
     setCargandoClubes(true)
     const { data: membresias } = await supabase
-      .from('club_miembros')
+      .from('miembros_club')
       .select('club_id')
       .eq('usuario_id', userId)
 
@@ -79,7 +79,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       const clubIds = membresias.map((m) => m.club_id)
       const { data: clubesData } = await supabase
         .from('clubes')
-        .select('id, nombre, codigo_invitacion, creador_id')
+        .select('id, nombre, codigo_invitacion, creado_por')
         .in('id', clubIds)
 
       if (clubesData && clubesData.length > 0) {
@@ -104,9 +104,9 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       setGeneroFiltro('Todos')
       setBusqueda('')
 
-      // 1. Obtener miembros del club
+      // 1. Obtener miembros del club desde miembros_club
       const { data: miembros } = await supabase
-        .from('club_miembros')
+        .from('miembros_club')
         .select('usuario_id')
         .eq('club_id', clubId)
 
@@ -118,10 +118,10 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
       const memberIds = miembros.map((m) => m.usuario_id)
 
-      // 2. Intentar obtener nombres desde perfiles (si existe la tabla)
+      // 2. Obtener nombres desde perfiles
       const { data: perfilesData } = await supabase
         .from('perfiles')
-        .select('id, nombre')
+        .select('id, nombre, nombre_usuario')
         .in('id', memberIds)
 
       // 3. Obtener ejemplares de todos los miembros del club
@@ -154,7 +154,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
           propietario_id: ej.propietario_id,
           propietario_nombre: esMio
             ? 'Tú'
-            : perfil?.nombre || `Miembro #${ej.propietario_id.slice(0, 4)}`,
+            : perfil?.nombre || perfil?.nombre_usuario || `Miembro #${ej.propietario_id.slice(0, 4)}`,
           libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
             isbn: ej.isbn,
             titulo: `ISBN: ${ej.isbn}`,
@@ -194,7 +194,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       .insert({
         nombre: nombreNuevoClub.trim(),
         codigo_invitacion: codigo,
-        creador_id: userId,
+        creado_por: userId,
+        es_privado: true,
       })
       .select()
       .single()
@@ -205,10 +206,15 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       return
     }
 
-    await supabase.from('club_miembros').insert({
+    const { error: miembroError } = await supabase.from('miembros_club').insert({
       club_id: nuevoClub.id,
       usuario_id: userId,
+      rol: 'admin',
     })
+
+    if (miembroError) {
+      alert(`Club creado, pero hubo un error al añadirte como miembro: ${miembroError.message}`)
+    }
 
     setNombreNuevoClub('')
     setModoFormulario('ninguno')
@@ -225,7 +231,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
     const { data: clubEncontrado, error } = await supabase
       .from('clubes')
-      .select('id, nombre, codigo_invitacion, creador_id')
+      .select('id, nombre, codigo_invitacion, creado_por')
       .eq('codigo_invitacion', cleanCode)
       .maybeSingle()
 
@@ -235,9 +241,10 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       return
     }
 
-    const { error: joinError } = await supabase.from('club_miembros').insert({
+    const { error: joinError } = await supabase.from('miembros_club').insert({
       club_id: clubEncontrado.id,
       usuario_id: userId,
+      rol: 'miembro',
     })
 
     if (joinError && joinError.code !== '23505') {
@@ -254,7 +261,12 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   }
 
   const solicitarPrestamo = async (ejemplar: EjemplarClub) => {
-    if (ejemplar.propietario_id === userId || ejemplar.estado !== 'disponible' || solicitandoId) {
+    if (
+      !clubActivo ||
+      ejemplar.propietario_id === userId ||
+      ejemplar.estado !== 'disponible' ||
+      solicitandoId
+    ) {
       return
     }
     setSolicitandoId(ejemplar.id)
@@ -262,7 +274,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     const { error } = await supabase.from('prestamos').insert({
       ejemplar_id: ejemplar.id,
       propietario_id: ejemplar.propietario_id,
-      solicitante_id: userId,
+      lector_id: userId,
+      club_id: clubActivo.id,
       estado: 'solicitado',
     })
 
