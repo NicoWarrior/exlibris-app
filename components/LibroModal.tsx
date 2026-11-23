@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  MapPin,
   MessageSquare,
   Pencil,
   RefreshCw,
@@ -68,11 +69,16 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [cargandoExtra, setCargandoExtra] = useState(false)
   const [procesando, setProcesando] = useState(false)
 
-  // Gestión de visibilidad en clubes (solo si esPropio)
+  // Gestión de visibilidad en clubes y zona local (solo si esPropio)
   const [misClubes, setMisClubes] = useState<ClubOpcion[]>([])
   const [clubesCompartidos, setClubesCompartidos] = useState<string[]>([])
   const [cargandoClubes, setCargandoClubes] = useState(false)
   const [togglingClubId, setTogglingClubId] = useState<string | null>(null)
+
+  const [visibleLocal, setVisibleLocal] = useState(false)
+  const [perfilLocalListo, setPerfilLocalListo] = useState(false)
+  const [codigoPostalUsuario, setCodigoPostalUsuario] = useState<string | null>(null)
+  const [togglingLocal, setTogglingLocal] = useState(false)
 
   // Reseñas por club (solo cuando se abre desde un club con clubId)
   const [resenas, setResenas] = useState<ResenaItem[]>([])
@@ -160,19 +166,35 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       setResenas([])
     }
 
-    // 2. Si el libro es propio, cargar los clubes del usuario y visibilidad
+    // 2. Si el libro es propio, cargar visibilidad en clubes y visibilidad local por CP
     if (libro.esPropio) {
-      const cargarVisibilidadClubes = async () => {
+      const cargarVisibilidad = async () => {
         setCargandoClubes(true)
         const {
           data: { user },
         } = await supabase.auth.getUser()
 
         if (user) {
-          const { data: membresias } = await supabase
-            .from('miembros_club')
-            .select('club_id')
-            .eq('usuario_id', user.id)
+          const [{ data: membresias }, { data: ejemplarInfo }, { data: perfilInfo }] =
+            await Promise.all([
+              supabase.from('miembros_club').select('club_id').eq('usuario_id', user.id),
+              supabase
+                .from('ejemplares')
+                .select('visible_local')
+                .eq('id', libro.ejemplarId)
+                .maybeSingle(),
+              supabase
+                .from('perfiles')
+                .select('codigo_postal, busqueda_local_activa')
+                .eq('id', user.id)
+                .maybeSingle(),
+            ])
+
+          setVisibleLocal(Boolean(ejemplarInfo?.visible_local))
+          setCodigoPostalUsuario(perfilInfo?.codigo_postal || null)
+          setPerfilLocalListo(
+            Boolean(perfilInfo?.busqueda_local_activa && perfilInfo?.codigo_postal)
+          )
 
           if (membresias && membresias.length > 0) {
             const clubIds = membresias.map((m) => m.club_id)
@@ -193,10 +215,11 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         }
         setCargandoClubes(false)
       }
-      cargarVisibilidadClubes()
+      cargarVisibilidad()
     } else {
       setMisClubes([])
       setClubesCompartidos([])
+      setVisibleLocal(false)
     }
 
     // 3. Autorelleno desde Google Books para ejemplares sin sinopsis o con género sin normalizar
@@ -249,6 +272,26 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   }, [libro, supabase, onActualizado, cargarResenasDelClub])
 
   if (!libro) return null
+
+  const alternarVisibilidadLocal = async () => {
+    if (!libro.esPropio || togglingLocal) return
+    setTogglingLocal(true)
+    const nuevoValor = !visibleLocal
+    setVisibleLocal(nuevoValor)
+
+    const { error } = await supabase
+      .from('ejemplares')
+      .update({ visible_local: nuevoValor })
+      .eq('id', libro.ejemplarId)
+
+    setTogglingLocal(false)
+    if (error) {
+      alert(`No se pudo actualizar la visibilidad local: ${error.message}`)
+      setVisibleLocal(!nuevoValor)
+    } else {
+      onActualizado()
+    }
+  }
 
   const guardarResena = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -585,9 +628,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
                   <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>
-                    Reseñas en {libro.clubNombre || 'el club'}
-                  </span>
+                  <span>Reseñas en {libro.clubNombre || 'el club'}</span>
                 </h3>
                 {mediaEstrellas && (
                   <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full">
@@ -597,7 +638,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 )}
               </div>
 
-              {/* Formulario para publicar o editar mi reseña */}
               {editandoResena ? (
                 <form
                   onSubmit={guardarResena}
@@ -658,7 +698,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 </form>
               ) : null}
 
-              {/* Listado de reseñas del club */}
               {cargandoResenas ? (
                 <p className="text-xs text-stone-400 italic">Cargando reseñas...</p>
               ) : resenas.length === 0 ? (
@@ -721,9 +760,9 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           )}
 
-          {/* Visibilidad selectiva por club (solo para el propietario) */}
+          {/* Visibilidad selectiva por club + Intercambio anónimo por código postal */}
           {libro.esPropio && !editando && (
-            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-2.5">
+            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5 text-stone-400" />
@@ -739,7 +778,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
               </div>
 
               {cargandoClubes ? (
-                <p className="text-xs text-stone-400 italic">Cargando clubes...</p>
+                <p className="text-xs text-stone-400 italic">Cargando visibilidad...</p>
               ) : misClubes.length === 0 ? (
                 <p className="text-xs text-stone-500">
                   Aún no perteneces a ningún club. Únete o crea uno en la pestaña Clubes.
@@ -782,6 +821,52 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                   })}
                 </div>
               )}
+
+              {/* Interruptor de búsqueda anónima por código postal */}
+              <div className="pt-2 border-t border-stone-200/80 space-y-1.5">
+                <h4 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Intercambio local anónimo</span>
+                </h4>
+
+                <button
+                  type="button"
+                  onClick={alternarVisibilidadLocal}
+                  disabled={togglingLocal}
+                  className={`w-full px-3 py-2.5 rounded-lg border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
+                    visibleLocal
+                      ? 'bg-sky-50 border-sky-300 text-sky-950'
+                      : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
+                  }`}
+                >
+                  <span className="truncate text-left">
+                    {codigoPostalUsuario
+                      ? `Visible en CP ${codigoPostalUsuario} (anónimo)`
+                      : 'Visible en mi código postal (anónimo)'}
+                  </span>
+                  <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
+                    {togglingLocal ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-400" />
+                    ) : visibleLocal ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-sky-700" />
+                        <span className="font-semibold text-sky-700">Activado</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-stone-400" />
+                        <span className="text-stone-400">Privado</span>
+                      </>
+                    )}
+                  </span>
+                </button>
+
+                {visibleLocal && !perfilLocalListo && (
+                  <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 leading-snug">
+                    Este libro ya está marcado, pero recuerda guardar tu <strong>Código Postal</strong> y activar la casilla general en <strong>Mi Perfil</strong> (arriba a la derecha) para que aparezca a tus vecinos.
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
