@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { createClient } from '@/utils/supabase/client'
 import { Camera, CheckCircle2, Loader2, Search, X } from 'lucide-react'
+import { extraerPremios, normalizarGenero } from '@/utils/generos'
+import { Award, Camera, CheckCircle2, Loader2, Search, X } from 'lucide-react'
 
 interface BookData {
   isbn: string
@@ -12,6 +14,7 @@ interface BookData {
   portada_url: string
   genero?: string | null
   sinopsis?: string | null
+  premios?: string | null
 }
 
 interface IsbnScannerProps {
@@ -93,6 +96,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           portada_url: existingBook.portada_url || '',
           genero: existingBook.genero || null,
           sinopsis: existingBook.sinopsis || null,
+          premios: existingBook.premios || null,
         })
         setStatus('found')
         return
@@ -109,8 +113,9 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           titulo: info.title || 'Sin título',
           autor: info.authors ? info.authors.join(', ') : 'Autor desconocido',
           portada_url: info.imageLinks?.thumbnail?.replace('http://', 'https://') || '',
-          genero: Array.isArray(info.categories) && info.categories.length > 0 ? info.categories[0] : null,
+          genero: normalizarGenero(info.categories),
           sinopsis: info.description || null,
+          premios: extraerPremios(info.categories, info.description),
         })
         setStatus('found')
         return
@@ -122,13 +127,15 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       const olBook = olData[`ISBN:${cleanIsbn}`]
 
       if (olBook) {
+        const subjects = olBook.subjects?.map((s: any) => s.name) || []
         setBook({
           isbn: cleanIsbn,
           titulo: olBook.title || 'Sin título',
           autor: olBook.authors ? olBook.authors.map((a: any) => a.name).join(', ') : 'Autor desconocido',
           portada_url: olBook.cover?.medium || '',
-          genero: olBook.subjects?.[0]?.name || null,
+          genero: normalizarGenero(subjects),
           sinopsis: null,
+          premios: extraerPremios(subjects, null),
         })
         setStatus('found')
         return
@@ -154,8 +161,9 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           titulo: book.titulo,
           autor: book.autor,
           portada_url: book.portada_url,
-          genero: book.genero || null,
+          genero: book.genero || 'Otros',
           sinopsis: book.sinopsis || null,
+          premios: book.premios || null,
         },
       ])
 
@@ -272,6 +280,19 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 {book.genero && (
                   <span className="inline-block mt-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-700">
                     {book.genero}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {book.genero && (
+                  <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-stone-200/70 text-stone-700">
+                    {book.genero}
+                  </span>
+                )}
+                {book.premios && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                    <Award className="w-2.5 h-2.5" />
+                    {book.premios}
                   </span>
                 )}
               </div>

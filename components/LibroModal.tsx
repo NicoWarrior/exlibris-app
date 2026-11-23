@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
-import { BookOpen, RefreshCw, Tag, Trash2, User, X } from 'lucide-react'
+import { extraerPremios, GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
+import { Award, BookOpen, Check, Pencil, RefreshCw, Tag, Trash2, User, X } from 'lucide-react'
 
 export interface LibroDetalle {
   ejemplarId: string
@@ -15,6 +16,7 @@ export interface LibroDetalle {
   portada_url: string
   genero?: string | null
   sinopsis?: string | null
+  premios?: string | null
 }
 
 interface LibroModalProps {
@@ -27,7 +29,9 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const supabase = createClient()
   const [estado, setEstado] = useState(libro?.estado || 'disponible')
   const [sinopsis, setSinopsis] = useState(libro?.sinopsis || '')
-  const [genero, setGenero] = useState(libro?.genero || '')
+  const [genero, setGenero] = useState(libro?.genero || 'Otros')
+  const [premios, setPremios] = useState(libro?.premios || '')
+  const [editando, setEditando] = useState(false)
   const [cargandoExtra, setCargandoExtra] = useState(false)
   const [procesando, setProcesando] = useState(false)
 
@@ -35,9 +39,13 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     if (!libro) return
     setEstado(libro.estado)
     setSinopsis(libro.sinopsis || '')
-    setGenero(libro.genero || '')
+    setGenero(libro.genero || 'Otros')
+    setPremios(libro.premios || '')
+    setEditando(false)
 
-    if (!libro.sinopsis || !libro.genero) {
+    // Autorelleno desde Google Books para ejemplares escaneados antes de añadir sinopsis/género/premios
+    const faltaGeneroLimpio = !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
+    if (!libro.sinopsis || faltaGeneroLimpio) {
       const enriquecerCatalogo = async () => {
         setCargandoExtra(true)
         try {
@@ -46,18 +54,26 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           const info = data.items?.[0]?.volumeInfo
           if (info) {
             const nuevaSinopsis = libro.sinopsis || info.description || ''
-            const nuevoGenero =
-              libro.genero ||
-              (Array.isArray(info.categories) && info.categories.length > 0 ? info.categories[0] : '')
+            const nuevoGenero = faltaGeneroLimpio
+              ? normalizarGenero(info.categories)
+              : (libro.genero as string)
+            const nuevosPremios =
+              libro.premios || extraerPremios(info.categories, info.description) || ''
 
-            if (nuevaSinopsis || nuevoGenero) {
+            if (
+              nuevaSinopsis !== (libro.sinopsis || '') ||
+              nuevoGenero !== (libro.genero || 'Otros') ||
+              nuevosPremios !== (libro.premios || '')
+            ) {
               setSinopsis(nuevaSinopsis)
               setGenero(nuevoGenero)
+              setPremios(nuevosPremios)
               await supabase
                 .from('libros_catalogo')
                 .update({
                   sinopsis: nuevaSinopsis || null,
-                  genero: nuevoGenero || null,
+                  genero: nuevoGenero || 'Otros',
+                  premios: nuevosPremios || null,
                 })
                 .eq('isbn', libro.isbn)
               onActualizado()
@@ -74,6 +90,28 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   }, [libro, supabase, onActualizado])
 
   if (!libro) return null
+
+  const guardarMetadatos = async () => {
+    if (!libro.esPropio || procesando) return
+    setProcesando(true)
+
+    const { error } = await supabase
+      .from('libros_catalogo')
+      .update({
+        genero: genero || 'Otros',
+        premios: premios.trim() || null,
+        sinopsis: sinopsis.trim() || null,
+      })
+      .eq('isbn', libro.isbn)
+
+    setProcesando(false)
+    if (error) {
+      alert(`Error al guardar cambios: ${error.message}`)
+    } else {
+      setEditando(false)
+      onActualizado()
+    }
+  }
 
   const alternarDisponibilidad = async () => {
     if (!libro.esPropio || estado === 'prestado' || procesando) return
@@ -124,13 +162,25 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           <span className="text-xs font-semibold uppercase tracking-wider text-stone-400">
             Ficha del libro
           </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            {libro.esPropio && !editando && (
+              <button
+                type="button"
+                onClick={() => setEditando(true)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:text-stone-900 hover:bg-stone-100 flex items-center gap-1 cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Editar ficha</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-100 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 space-y-5">
@@ -180,6 +230,15 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 )}
               </div>
 
+              {premios && !editando && (
+                <div className="pt-0.5">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-50 text-amber-900 border border-amber-200/80">
+                    <Award className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>{premios}</span>
+                  </span>
+                </div>
+              )}
+
               <div className="pt-1 flex items-center gap-1.5 text-xs text-stone-500">
                 <User className="w-3.5 h-3.5 text-stone-400" />
                 <span>
@@ -190,24 +249,86 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2">
-              Sinopsis
-            </h3>
-            {cargandoExtra ? (
-              <p className="text-xs text-stone-400 italic">Buscando sinopsis oficial...</p>
-            ) : sinopsis ? (
-              <p className="text-xs sm:text-sm text-stone-700 leading-relaxed whitespace-pre-line">
-                {sinopsis}
-              </p>
-            ) : (
-              <p className="text-xs text-stone-400 italic">
-                No hay sinopsis oficial disponible para este ISBN.
-              </p>
-            )}
-          </div>
+          {editando ? (
+            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Género</label>
+                <select
+                  value={genero}
+                  onChange={(e) => setGenero(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
+                >
+                  {GENEROS_ESTANDAR.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          {libro.esPropio && (
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
+                  Premios literarios (opcional)
+                </label>
+                <input
+                  type="text"
+                  value={premios}
+                  onChange={(e) => setPremios(e.target.value)}
+                  placeholder="Ej. Premio Planeta, Premio Pulitzer..."
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Sinopsis</label>
+                <textarea
+                  rows={4}
+                  value={sinopsis}
+                  onChange={(e) => setSinopsis(e.target.value)}
+                  placeholder="Escribe o pega aquí la sinopsis del libro..."
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setEditando(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-stone-600 hover:bg-stone-200 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={guardarMetadatos}
+                  disabled={procesando}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-800 text-white flex items-center gap-1 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Guardar ficha</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-2">
+                Sinopsis
+              </h3>
+              {cargandoExtra ? (
+                <p className="text-xs text-stone-400 italic">Buscando sinopsis oficial...</p>
+              ) : sinopsis ? (
+                <p className="text-xs sm:text-sm text-stone-700 leading-relaxed whitespace-pre-line">
+                  {sinopsis}
+                </p>
+              ) : (
+                <p className="text-xs text-stone-400 italic">
+                  No hay sinopsis oficial disponible para este ISBN.
+                </p>
+              )}
+            </div>
+          )}
+
+          {libro.esPropio && !editando && (
             <div className="pt-1 flex flex-col sm:flex-row gap-2.5">
               <button
                 type="button"

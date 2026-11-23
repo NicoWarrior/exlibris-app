@@ -6,7 +6,7 @@ import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
 import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
-import { ArrowLeftRight, BookOpen, LogOut, Plus, ScanBarcode, Users } from 'lucide-react'
+import { ArrowLeftRight, Award, BookOpen, LogOut, Plus, ScanBarcode, Users } from 'lucide-react'
 
 interface LibroEstanteria {
   id: string
@@ -18,6 +18,7 @@ interface LibroEstanteria {
     portada_url: string
     genero?: string | null
     sinopsis?: string | null
+    premios?: string | null
   }
 }
 
@@ -44,7 +45,7 @@ export default function Home() {
         const isbns = ejemplaresData.map((e) => e.isbn)
         const { data: catalogoData } = await supabase
           .from('libros_catalogo')
-          .select('isbn, titulo, autor, portada_url, genero, sinopsis')
+          .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
           .in('isbn', isbns)
 
         const combinados = ejemplaresData.map((ej) => ({
@@ -55,8 +56,9 @@ export default function Home() {
             titulo: `ISBN: ${ej.isbn}`,
             autor: 'Sin datos en catálogo',
             portada_url: '',
-            genero: null,
+            genero: 'Otros',
             sinopsis: null,
+            premios: null,
           },
         }))
         setMisLibros(combinados)
@@ -201,6 +203,7 @@ export default function Home() {
                         portada_url: item.libros_catalogo.portada_url,
                         genero: item.libros_catalogo.genero,
                         sinopsis: item.libros_catalogo.sinopsis,
+                        premios: item.libros_catalogo.premios,
                       })
                     }
                     className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-sm flex flex-col cursor-pointer hover:border-emerald-500 transition"
@@ -217,6 +220,16 @@ export default function Home() {
                           Sin portada
                         </div>
                       )}
+
+                      {item.libros_catalogo?.premios && (
+                        <span
+                          title={item.libros_catalogo.premios}
+                          className="absolute top-2 left-2 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-sm"
+                        >
+                          <Award className="w-3 h-3" />
+                        </span>
+                      )}
+
                       <span
                         className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm ${
                           item.estado === 'disponible'
