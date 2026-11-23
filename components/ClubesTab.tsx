@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
 import { GENEROS_ESTANDAR } from '@/utils/generos'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import {
@@ -56,7 +57,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [clubActivo, setClubActivo] = useState<Club | null>(null)
   const [librosClub, setLibrosClub] = useState<EjemplarClub[]>([])
 
-  // Filtros combinados (buscador + género)
   const [busqueda, setBusqueda] = useState('')
   const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
@@ -64,7 +64,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [cargandoClubes, setCargandoClubes] = useState(true)
   const [cargandoLibros, setCargandoLibros] = useState(false)
 
-  // Formularios crear / unirse
   const [modoFormulario, setModoFormulario] = useState<'ninguno' | 'crear' | 'unirse'>('ninguno')
   const [nombreNuevoClub, setNombreNuevoClub] = useState('')
   const [codigoUnirse, setCodigoUnirse] = useState('')
@@ -108,7 +107,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       setGeneroFiltro('Todos')
       setBusqueda('')
 
-      // 1. Obtener los IDs de ejemplares compartidos explícitamente en este club
       const { data: compartidos } = await supabase
         .from('ejemplares_club')
         .select('ejemplar_id')
@@ -122,7 +120,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
       const ejemplarIds = compartidos.map((c) => c.ejemplar_id)
 
-      // 2. Obtener los datos de esos ejemplares concretos
       const { data: ejemplaresData } = await supabase
         .from('ejemplares')
         .select('id, isbn, estado, propietario_id')
@@ -134,7 +131,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         return
       }
 
-      // 3. Obtener nombres de los propietarios y metadatos del catálogo + reseñas del club
       const ownerIds = Array.from(new Set(ejemplaresData.map((e) => e.propietario_id)))
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
 
@@ -301,6 +297,12 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     if (error) {
       alert(`No se pudo solicitar el préstamo: ${error.message}`)
     } else {
+      enviarNotificacionPush({
+        destinatarioId: ejemplar.propietario_id,
+        titulo: `Nueva solicitud en ${clubActivo.nombre}`,
+        cuerpo: `Te han pedido prestado "${ejemplar.libros_catalogo.titulo}"`,
+        url: '/',
+      })
       alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
       onSolicitado()
     }
@@ -349,7 +351,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
   return (
     <div className="space-y-5">
-      {/* Cabecera y botones de acción */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Mis Clubes</h1>
@@ -377,7 +378,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       </div>
 
-      {/* Formulario Crear Club */}
       {modoFormulario === 'crear' && (
         <form
           onSubmit={crearClub}
@@ -406,7 +406,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </form>
       )}
 
-      {/* Formulario Unirse a Club */}
       {modoFormulario === 'unirse' && (
         <form
           onSubmit={unirseAClub}
@@ -435,7 +434,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </form>
       )}
 
-      {/* Estado vacío si no pertenece a ningún club */}
       {clubes.length === 0 ? (
         <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
           <Users className="w-10 h-10 text-stone-300 mx-auto mb-3" />
@@ -448,7 +446,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       ) : (
         <>
-          {/* Selector de club activo */}
           <div className="flex gap-2 overflow-x-auto pb-1">
             {clubes.map((club) => (
               <button
@@ -466,7 +463,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             ))}
           </div>
 
-          {/* Banner con código de invitación del club activo */}
           {clubActivo && (
             <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
               <div>
@@ -488,7 +484,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             </div>
           )}
 
-          {/* Buscador + Barra de categorías con contador */}
           {librosClub.length > 0 && (
             <div className="space-y-3">
               <div className="relative">
@@ -546,7 +541,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             </div>
           )}
 
-          {/* Listado / Grid de libros del club */}
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
               Cargando biblioteca del club...
@@ -676,7 +670,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </>
       )}
 
-      {/* Modal de detalle de libro con reseñas del club */}
       <LibroModal
         libro={libroSeleccionado}
         onClose={() => {

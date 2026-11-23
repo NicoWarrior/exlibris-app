@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -59,11 +60,9 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [procesandoId, setProcesandoId] = useState<string | null>(null)
   const [filtroVista, setFiltroVista] = useState<'activos' | 'historial'>('activos')
 
-  // Estado de subida de fotos y visor ampliado
   const [subiendoFotoKey, setSubiendoFotoKey] = useState<string | null>(null)
   const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
 
-  // Estado del chat por préstamo
   const [chatAbiertoId, setChatAbiertoId] = useState<string | null>(null)
   const [mensajes, setMensajes] = useState<MensajeChat[]>([])
   const [cargandoChat, setCargandoChat] = useState(false)
@@ -160,7 +159,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     cargarPrestamos()
   }, [cargarPrestamos])
 
-  // Suscripción en tiempo real al chat abierto
   useEffect(() => {
     if (!chatAbiertoId) {
       setMensajes([])
@@ -281,6 +279,20 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       setNuevoMensaje(texto)
     } else if (data) {
       setMensajes((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]))
+
+      const chatActual = prestamos.find((p) => p.id === chatAbiertoId)
+      if (chatActual) {
+        const destinatario = chatActual.es_propietario
+          ? chatActual.lector_id
+          : chatActual.propietario_id
+
+        enviarNotificacionPush({
+          destinatarioId: destinatario,
+          titulo: `Chat · ${chatActual.titulo}`,
+          cuerpo: texto,
+          url: '/',
+        })
+      }
     }
   }
 
@@ -306,6 +318,12 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     if (pErr || eErr) {
       alert(`Error al aceptar préstamo: ${pErr?.message || eErr?.message}`)
     } else {
+      enviarNotificacionPush({
+        destinatarioId: item.lector_id,
+        titulo: '¡Préstamo aceptado!',
+        cuerpo: `Te han aceptado el préstamo de "${item.titulo}". Entra al chat para quedar.`,
+        url: '/',
+      })
       await cargarPrestamos()
       onCambioEstado()
     }
@@ -324,6 +342,14 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     if (error) {
       alert(`Error al actualizar solicitud: ${error.message}`)
     } else {
+      if (nuevoEstado === 'rechazado') {
+        enviarNotificacionPush({
+          destinatarioId: item.lector_id,
+          titulo: 'Solicitud no disponible',
+          cuerpo: `No ha sido posible prestar "${item.titulo}" en este momento.`,
+          url: '/',
+        })
+      }
       await cargarPrestamos()
       onCambioEstado()
     }
@@ -351,6 +377,12 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     if (pErr || eErr) {
       alert(`Error al registrar devolución: ${pErr?.message || eErr?.message}`)
     } else {
+      enviarNotificacionPush({
+        destinatarioId: item.lector_id,
+        titulo: 'Devolución confirmada',
+        cuerpo: `Se ha registrado la devolución de "${item.titulo}". ¡No olvides dejar tu reseña!`,
+        url: '/',
+      })
       await cargarPrestamos()
       onCambioEstado()
     }
@@ -383,7 +415,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
 
   return (
     <div className="space-y-5">
-      {/* Cabecera y selector Activos / Historial */}
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Préstamos</h1>
@@ -448,7 +479,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                 className="bg-white rounded-2xl border border-stone-200 shadow-xs overflow-hidden"
               >
                 <div className="p-4 flex gap-3.5">
-                  {/* Portada */}
                   <div className="w-16 aspect-[2/3] bg-stone-100 rounded-lg overflow-hidden shrink-0 border border-stone-200">
                     {item.portada_url ? (
                       <img
@@ -463,7 +493,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                     )}
                   </div>
 
-                  {/* Datos del préstamo */}
                   <div className="flex-1 min-w-0 space-y-1.5">
                     <div className="flex items-start justify-between gap-2">
                       <span
@@ -520,7 +549,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                       </p>
                     )}
 
-                    {/* Botones de acción según rol y estado */}
                     <div className="pt-1.5 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
@@ -586,7 +614,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                   </div>
                 </div>
 
-                {/* Acta fotográfica del estado del ejemplar (Entrega y Devolución) */}
                 {mostrarActaFotos && (
                   <div className="border-t border-stone-100 bg-stone-50/70 px-4 py-3">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2 flex items-center gap-1.5">
@@ -595,7 +622,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                     </p>
 
                     <div className="grid grid-cols-2 gap-2.5">
-                      {/* Foto de entrega */}
                       <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
                         {item.foto_entrega_url ? (
                           <button
@@ -653,7 +679,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         )}
                       </div>
 
-                      {/* Foto de devolución */}
                       <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
                         {item.foto_devolucion_url ? (
                           <button
@@ -712,7 +737,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                   </div>
                 )}
 
-                {/* Panel desplegable de Chat en tiempo real */}
                 {chatAbierto && (
                   <div className="border-t border-stone-200 bg-stone-50 p-4 space-y-3">
                     <div className="flex items-center justify-between">
@@ -795,7 +819,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         </div>
       )}
 
-      {/* Visor ampliado de foto (Lightbox) */}
       {fotoAmpliada && (
         <div
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-4"

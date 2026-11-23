@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { activarNotificacionesPush } from '@/utils/notificaciones'
 import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
 import ExplorarLocalTab from '@/components/ExplorarLocalTab'
@@ -11,6 +12,8 @@ import PerfilModal from '@/components/PerfilModal'
 import {
   ArrowLeftRight,
   Award,
+  Bell,
+  BellRing,
   BookOpen,
   LogOut,
   MapPin,
@@ -45,6 +48,8 @@ export default function Home() {
   const [showScanner, setShowScanner] = useState(false)
   const [showPerfil, setShowPerfil] = useState(false)
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
+  const [pushActivo, setPushActivo] = useState(false)
+  const [activandoPush, setActivandoPush] = useState(false)
   const supabase = createClient()
 
   const sincronizarPerfilInicial = useCallback(
@@ -122,6 +127,10 @@ export default function Home() {
   )
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setPushActivo(Notification.permission === 'granted')
+    }
+
     const getUser = async () => {
       const {
         data: { user },
@@ -129,11 +138,26 @@ export default function Home() {
       setUser(user)
       if (user) {
         await Promise.all([sincronizarPerfilInicial(user), cargarDatos(user.id)])
+        // Si ya dio permiso anteriormente en este navegador, asegurar suscripción al día
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          activarNotificacionesPush(user.id).catch(() => {})
+        }
       }
       setLoading(false)
     }
     getUser()
   }, [supabase, cargarDatos, sincronizarPerfilInicial])
+
+  const handleActivarNotificaciones = async () => {
+    if (!user || activandoPush) return
+    setActivandoPush(true)
+    const ok = await activarNotificacionesPush(user.id)
+    setActivandoPush(false)
+    if (ok) {
+      setPushActivo(true)
+      alert('¡Notificaciones activadas en este dispositivo!')
+    }
+  }
 
   const handleLogin = async () => {
     await supabase.auth.signInWithOAuth({
@@ -188,7 +212,25 @@ export default function Home() {
             <BookOpen className="w-5 h-5 text-emerald-700" />
             <span>Exlibris</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleActivarNotificaciones}
+              disabled={activandoPush}
+              className={`p-2 rounded-lg border transition cursor-pointer ${
+                pushActivo
+                  ? 'text-emerald-700 bg-emerald-50/70 border-emerald-200'
+                  : 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
+              }`}
+              title={
+                pushActivo
+                  ? 'Notificaciones activadas en este dispositivo'
+                  : 'Activar notificaciones push en este dispositivo'
+              }
+            >
+              {pushActivo ? <BellRing className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+            </button>
+
             <button
               type="button"
               onClick={() => setShowPerfil(true)}
@@ -196,8 +238,9 @@ export default function Home() {
               title="Editar alias y código postal"
             >
               <UserCircle2 className="w-4 h-4 text-emerald-700" />
-              <span className="max-w-[120px] truncate">{aliasUsuario || 'Mi perfil'}</span>
+              <span className="max-w-[105px] truncate">{aliasUsuario || 'Mi perfil'}</span>
             </button>
+
             <button
               onClick={handleLogout}
               className="p-2 text-stone-500 hover:text-stone-800 rounded-lg hover:bg-stone-100 cursor-pointer"

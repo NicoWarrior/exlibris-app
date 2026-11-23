@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { GENEROS_ESTANDAR } from '@/utils/generos'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
 import {
   Award,
   BookOpen,
@@ -159,7 +160,7 @@ export default function ExplorarLocalTab({
     }
   }
 
-  const solicitarPrestamoLocal = async (ejemplar: EjemplarLocal) => {
+const solicitarPrestamoLocal = async (ejemplar: EjemplarLocal) => {
     if (ejemplar.propietario_id === userId || solicitandoId) return
     setSolicitandoId(ejemplar.id)
 
@@ -175,6 +176,12 @@ export default function ExplorarLocalTab({
     if (error) {
       alert(`No se pudo enviar la solicitud: ${error.message}`)
     } else {
+      enviarNotificacionPush({
+        destinatarioId: ejemplar.propietario_id,
+        titulo: `Solicitud vecinal (CP ${ejemplar.codigo_postal})`,
+        cuerpo: `Un vecino te ha pedido prestado "${ejemplar.libros_catalogo.titulo}"`,
+        url: '/',
+      })
       alert(
         `Solicitud enviada al lector de CP ${ejemplar.codigo_postal}. Podréis acordar el punto de entrega desde la pestaña Préstamos.`
       )
