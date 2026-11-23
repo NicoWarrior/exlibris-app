@@ -6,7 +6,17 @@ import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
 import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
-import { ArrowLeftRight, Award, BookOpen, LogOut, Plus, ScanBarcode, Users } from 'lucide-react'
+import PerfilModal from '@/components/PerfilModal'
+import {
+  ArrowLeftRight,
+  Award,
+  BookOpen,
+  LogOut,
+  Plus,
+  ScanBarcode,
+  UserCircle2,
+  Users,
+} from 'lucide-react'
 
 interface LibroEstanteria {
   id: string
@@ -24,67 +34,102 @@ interface LibroEstanteria {
 
 export default function Home() {
   const [user, setUser] = useState<any>(null)
+  const [aliasUsuario, setAliasUsuario] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'estanteria' | 'clubes' | 'prestamos'>('estanteria')
   const [misLibros, setMisLibros] = useState<LibroEstanteria[]>([])
   const [pendientesCount, setPendientesCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
+  const [showPerfil, setShowPerfil] = useState(false)
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
   const supabase = createClient()
 
-  const cargarDatos = useCallback(async (uid: string) => {
-    const { data: ejemplaresData, error: ejError } = await supabase
-      .from('ejemplares')
-      .select('id, isbn, estado')
-      .eq('propietario_id', uid)
+  const sincronizarPerfilInicial = useCallback(
+    async (authUser: any) => {
+      const nombrePorDefecto =
+        authUser.user_metadata?.full_name ||
+        authUser.email?.split('@')[0] ||
+        'Lector'
 
-    if (!ejError && ejemplaresData) {
-      if (ejemplaresData.length === 0) {
-        setMisLibros([])
+      const { data: perfilExistente } = await supabase
+        .from('perfiles')
+        .select('nombre, nombre_usuario')
+        .eq('id', authUser.id)
+        .maybeSingle()
+
+      if (perfilExistente?.nombre || perfilExistente?.nombre_usuario) {
+        setAliasUsuario(perfilExistente.nombre || perfilExistente.nombre_usuario)
       } else {
-        const isbns = ejemplaresData.map((e) => e.isbn)
-        const { data: catalogoData } = await supabase
-          .from('libros_catalogo')
-          .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
-          .in('isbn', isbns)
-
-        const combinados = ejemplaresData.map((ej) => ({
-          id: ej.id,
-          estado: ej.estado,
-          libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
-            isbn: ej.isbn,
-            titulo: `ISBN: ${ej.isbn}`,
-            autor: 'Sin datos en catálogo',
-            portada_url: '',
-            genero: 'Otros',
-            sinopsis: null,
-            premios: null,
-          },
-        }))
-        setMisLibros(combinados)
+        setAliasUsuario(nombrePorDefecto)
+        await supabase.from('perfiles').upsert({
+          id: authUser.id,
+          email: authUser.email,
+          nombre: nombrePorDefecto,
+          nombre_usuario: nombrePorDefecto,
+        })
       }
-    }
+    },
+    [supabase]
+  )
 
-    const { count } = await supabase
-      .from('prestamos')
-      .select('id', { count: 'exact', head: true })
-      .eq('propietario_id', uid)
-      .eq('estado', 'solicitado')
+  const cargarDatos = useCallback(
+    async (uid: string) => {
+      const { data: ejemplaresData, error: ejError } = await supabase
+        .from('ejemplares')
+        .select('id, isbn, estado')
+        .eq('propietario_id', uid)
 
-    setPendientesCount(count || 0)
-  }, [supabase])
+      if (!ejError && ejemplaresData) {
+        if (ejemplaresData.length === 0) {
+          setMisLibros([])
+        } else {
+          const isbns = ejemplaresData.map((e) => e.isbn)
+          const { data: catalogoData } = await supabase
+            .from('libros_catalogo')
+            .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
+            .in('isbn', isbns)
+
+          const combinados = ejemplaresData.map((ej) => ({
+            id: ej.id,
+            estado: ej.estado,
+            libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
+              isbn: ej.isbn,
+              titulo: `ISBN: ${ej.isbn}`,
+              autor: 'Sin datos en catálogo',
+              portada_url: '',
+              genero: 'Otros',
+              sinopsis: null,
+              premios: null,
+            },
+          }))
+          setMisLibros(combinados)
+        }
+      }
+
+      const { count } = await supabase
+        .from('prestamos')
+        .select('id', { count: 'exact', head: true })
+        .eq('propietario_id', uid)
+        .eq('estado', 'solicitado')
+
+      setPendientesCount(count || 0)
+    },
+    [supabase]
+  )
 
   useEffect(() => {
     const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
       setUser(user)
       if (user) {
-        await cargarDatos(user.id)
+        await Promise.all([sincronizarPerfilInicial(user), cargarDatos(user.id)])
       }
       setLoading(false)
     }
     getUser()
-  }, [supabase, cargarDatos])
+  }, [supabase, cargarDatos, sincronizarPerfilInicial])
 
   const handleLogin = async () => {
     await supabase.auth.signInWithOAuth({
@@ -139,8 +184,16 @@ export default function Home() {
             <BookOpen className="w-5 h-5 text-emerald-700" />
             <span>Exlibris</span>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-stone-500 hidden sm:inline">{user.email}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPerfil(true)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-stone-700 hover:bg-stone-100 border border-stone-200/80 flex items-center gap-1.5 cursor-pointer"
+              title="Editar alias y código postal"
+            >
+              <UserCircle2 className="w-4 h-4 text-emerald-700" />
+              <span className="max-w-[120px] truncate">{aliasUsuario || 'Mi perfil'}</span>
+            </button>
             <button
               onClick={handleLogout}
               className="p-2 text-stone-500 hover:text-stone-800 rounded-lg hover:bg-stone-100 cursor-pointer"
@@ -195,7 +248,7 @@ export default function Home() {
                       setLibroSeleccionado({
                         ejemplarId: item.id,
                         estado: item.estado,
-                        propietarioNombre: user.user_metadata?.full_name || user.email || 'Tú',
+                        propietarioNombre: aliasUsuario || 'Tú',
                         esPropio: true,
                         isbn: item.libros_catalogo.isbn,
                         titulo: item.libros_catalogo.titulo,
@@ -325,6 +378,15 @@ export default function Home() {
         libro={libroSeleccionado}
         onClose={() => setLibroSeleccionado(null)}
         onActualizado={() => cargarDatos(user.id)}
+      />
+
+      <PerfilModal
+        isOpen={showPerfil}
+        userId={user.id}
+        userEmail={user.email || ''}
+        defaultName={aliasUsuario}
+        onClose={() => setShowPerfil(false)}
+        onPerfilGuardado={(nuevoAlias) => setAliasUsuario(nuevoAlias)}
       />
     </div>
   )
