@@ -1,0 +1,16 @@
+{
+  "name": "Exlibris · Biblioteca Compartida",
+  "short_name": "Exlibris",
+  "description": "Comparte tus libros físicos con tus clubes de lectura y vecinos.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fafaf9",
+  "theme_color": "#047857",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}
