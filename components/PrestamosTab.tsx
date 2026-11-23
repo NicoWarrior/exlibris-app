@@ -38,6 +38,7 @@ interface PrestamoItem {
   otro_usuario_nombre: string
   club_nombre: string | null
   es_propietario: boolean
+  sin_leer_count: number
 }
 
 interface MensajeChat {
@@ -46,6 +47,7 @@ interface MensajeChat {
   remitente_id: string
   contenido: string
   creado_en: string
+  leido?: boolean
 }
 
 interface PrestamosTabProps {
@@ -87,6 +89,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       return
     }
 
+    const prestamoIds = prestamosData.map((p) => p.id)
     const ejemplarIds = Array.from(new Set(prestamosData.map((p) => p.ejemplar_id)))
     const otroUserIds = Array.from(
       new Set(
@@ -99,14 +102,32 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       new Set(prestamosData.map((p) => p.club_id).filter(Boolean) as string[])
     )
 
-    const [{ data: ejemplaresData }, { data: perfilesData }, { data: clubesData }] =
-      await Promise.all([
-        supabase.from('ejemplares').select('id, isbn').in('id', ejemplarIds),
-        supabase.from('perfiles').select('id, nombre, nombre_usuario').in('id', otroUserIds),
-        clubIds.length > 0
-          ? supabase.from('clubes').select('id, nombre').in('id', clubIds)
-          : Promise.resolve({ data: [] as { id: string; nombre: string }[] }),
-      ])
+    const [
+      { data: ejemplaresData },
+      { data: perfilesData },
+      { data: clubesData },
+      { data: noLeidosData },
+    ] = await Promise.all([
+      supabase.from('ejemplares').select('id, isbn').in('id', ejemplarIds),
+      supabase.from('perfiles').select('id, nombre, nombre_usuario').in('id', otroUserIds),
+      clubIds.length > 0
+        ? supabase.from('clubes').select('id, nombre').in('id', clubIds)
+        : Promise.resolve({ data: [] as { id: string; nombre: string }[] }),
+      supabase
+        .from('mensajes_prestamo')
+        .select('prestamo_id')
+        .in('prestamo_id', prestamoIds)
+        .neq('remitente_id', userId)
+        .eq('leido', false),
+    ])
+
+    const conteoSinLeerPorPrestamo = (noLeidosData || []).reduce<Record<string, number>>(
+      (acc, m) => {
+        acc[m.prestamo_id] = (acc[m.prestamo_id] || 0) + 1
+        return acc
+      },
+      {}
+    )
 
     const isbns = Array.from(
       new Set((ejemplaresData || []).map((e) => e.isbn).filter(Boolean))
@@ -148,6 +169,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
           perfil?.nombre || perfil?.nombre_usuario || `Usuario #${otroId.slice(0, 4)}`,
         club_nombre: club?.nombre || null,
         es_propietario: esPropietario,
+        sin_leer_count: conteoSinLeerPorPrestamo[p.id] || 0,
       }
     })
 
@@ -158,6 +180,50 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   useEffect(() => {
     cargarPrestamos()
   }, [cargarPrestamos])
+
+  // Escuchar nuevos mensajes entrantes mientras la pestaña Préstamos está abierta
+  useEffect(() => {
+    const channel = supabase
+      .channel(`prestamos-unread-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'mensajes_prestamo' },
+        (payload) => {
+          const nuevo = payload.new as MensajeChat
+          if (nuevo.remitente_id !== userId && nuevo.prestamo_id !== chatAbiertoId) {
+            setPrestamos((prev) =>
+              prev.map((p) =>
+                p.id === nuevo.prestamo_id
+                  ? { ...p, sin_leer_count: p.sin_leer_count + 1 }
+                  : p
+              )
+            )
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [supabase, userId, chatAbiertoId])
+
+  const marcarChatComoLeido = useCallback(
+    async (prestamoId: string) => {
+      await supabase
+        .from('mensajes_prestamo')
+        .update({ leido: true })
+        .eq('prestamo_id', prestamoId)
+        .neq('remitente_id', userId)
+        .eq('leido', false)
+
+      setPrestamos((prev) =>
+        prev.map((p) => (p.id === prestamoId ? { ...p, sin_leer_count: 0 } : p))
+      )
+      onCambioEstado()
+    },
+    [supabase, userId, onCambioEstado]
+  )
 
   useEffect(() => {
     if (!chatAbiertoId) {
@@ -171,13 +237,14 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       setCargandoChat(true)
       const { data } = await supabase
         .from('mensajes_prestamo')
-        .select('id, prestamo_id, remitente_id, contenido, creado_en')
+        .select('id, prestamo_id, remitente_id, contenido, creado_en, leido')
         .eq('prestamo_id', chatAbiertoId)
         .order('creado_en', { ascending: true })
 
       if (activo) {
         setMensajes(data || [])
         setCargandoChat(false)
+        await marcarChatComoLeido(chatAbiertoId)
       }
     }
 
@@ -193,11 +260,14 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
           table: 'mensajes_prestamo',
           filter: `prestamo_id=eq.${chatAbiertoId}`,
         },
-        (payload) => {
+        async (payload) => {
           const nuevo = payload.new as MensajeChat
           setMensajes((prev) =>
             prev.some((m) => m.id === nuevo.id) ? prev : [...prev, nuevo]
           )
+          if (nuevo.remitente_id !== userId) {
+            await marcarChatComoLeido(chatAbiertoId)
+          }
         }
       )
       .subscribe()
@@ -206,7 +276,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       activo = false
       supabase.removeChannel(channel)
     }
-  }, [chatAbiertoId, supabase])
+  }, [chatAbiertoId, supabase, userId, marcarChatComoLeido])
 
   useEffect(() => {
     mensajesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -247,8 +317,9 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       if (dbError) throw dbError
 
       await cargarPrestamos()
-    } catch (err: any) {
-      alert(`No se pudo subir la foto: ${err.message || 'Error desconocido'}`)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido'
+      alert(`No se pudo subir la foto: ${msg}`)
     } finally {
       setSubiendoFotoKey(null)
     }
@@ -268,6 +339,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         prestamo_id: chatAbiertoId,
         remitente_id: userId,
         contenido: texto,
+        leido: false,
       })
       .select()
       .single()
@@ -388,10 +460,19 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     }
   }
 
+  const esActivo = (estado: string) =>
+    estado === 'solicitado' || estado === 'activo' || estado === 'en_curso'
+
+  const sinLeerActivos = prestamos
+    .filter((p) => esActivo(p.estado))
+    .reduce((acc, p) => acc + p.sin_leer_count, 0)
+
+  const sinLeerHistorial = prestamos
+    .filter((p) => !esActivo(p.estado))
+    .reduce((acc, p) => acc + p.sin_leer_count, 0)
+
   const prestamosFiltrados = prestamos.filter((p) =>
-    filtroVista === 'activos'
-      ? p.estado === 'solicitado' || p.estado === 'activo' || p.estado === 'en_curso'
-      : p.estado === 'devuelto' || p.estado === 'rechazado' || p.estado === 'cancelado'
+    filtroVista === 'activos' ? esActivo(p.estado) : !esActivo(p.estado)
   )
 
   const formatearHora = (iso: string) => {
@@ -427,24 +508,34 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
           <button
             type="button"
             onClick={() => setFiltroVista('activos')}
-            className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               filtroVista === 'activos'
                 ? 'bg-white text-stone-900 shadow-xs'
                 : 'text-stone-600 hover:text-stone-900'
             }`}
           >
-            En curso
+            <span>En curso</span>
+            {sinLeerActivos > 0 && (
+              <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                {sinLeerActivos}
+              </span>
+            )}
           </button>
           <button
             type="button"
             onClick={() => setFiltroVista('historial')}
-            className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               filtroVista === 'historial'
                 ? 'bg-white text-stone-900 shadow-xs'
                 : 'text-stone-600 hover:text-stone-900'
             }`}
           >
-            Historial
+            <span>Historial</span>
+            {sinLeerHistorial > 0 && (
+              <span className="bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                {sinLeerHistorial}
+              </span>
+            )}
           </button>
         </div>
       </div>
@@ -476,7 +567,11 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
             return (
               <div
                 key={item.id}
-                className="bg-white rounded-2xl border border-stone-200 shadow-xs overflow-hidden"
+                className={`bg-white rounded-2xl border shadow-xs overflow-hidden transition ${
+                  item.sin_leer_count > 0 && !chatAbierto
+                    ? 'border-emerald-400 ring-1 ring-emerald-200'
+                    : 'border-stone-200'
+                }`}
               >
                 <div className="p-4 flex gap-3.5">
                   <div className="w-16 aspect-[2/3] bg-stone-100 rounded-lg overflow-hidden shrink-0 border border-stone-200">
@@ -553,14 +648,21 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                       <button
                         type="button"
                         onClick={() => setChatAbiertoId(chatAbierto ? null : item.id)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                        className={`relative px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                           chatAbierto
                             ? 'bg-stone-900 text-white'
+                            : item.sin_leer_count > 0
+                            ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300'
                             : 'bg-stone-100 hover:bg-stone-200 text-stone-800'
                         }`}
                       >
                         <MessageCircle className="w-3.5 h-3.5" />
                         <span>{chatAbierto ? 'Cerrar chat' : 'Chat quedada / novela'}</span>
+                        {!chatAbierto && item.sin_leer_count > 0 && (
+                          <span className="ml-0.5 bg-red-600 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-xs">
+                            {item.sin_leer_count}
+                          </span>
+                        )}
                       </button>
 
                       {item.es_propietario && item.estado === 'solicitado' && (

@@ -44,7 +44,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'estanteria' | 'clubes' | 'barrio' | 'prestamos'>('estanteria')
   const [misLibros, setMisLibros] = useState<LibroEstanteria[]>([])
-  const [pendientesCount, setPendientesCount] = useState(0)
+  const [notificacionesPrestamosCount, setNotificacionesPrestamosCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
   const [showPerfil, setShowPerfil] = useState(false)
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
@@ -115,13 +115,32 @@ export default function Home() {
         }
       }
 
-      const { count } = await supabase
-        .from('prestamos')
-        .select('id', { count: 'exact', head: true })
-        .eq('propietario_id', uid)
-        .eq('estado', 'solicitado')
+      const [{ count: solicitudesPendientes }, { data: misPrestamosIds }] = await Promise.all([
+        supabase
+          .from('prestamos')
+          .select('id', { count: 'exact', head: true })
+          .eq('propietario_id', uid)
+          .eq('estado', 'solicitado'),
+        supabase
+          .from('prestamos')
+          .select('id')
+          .or(`propietario_id.eq.${uid},lector_id.eq.${uid}`),
+      ])
 
-      setPendientesCount(count || 0)
+      let mensajesSinLeer = 0
+      if (misPrestamosIds && misPrestamosIds.length > 0) {
+        const ids = misPrestamosIds.map((p) => p.id)
+        const { count: unreadCount } = await supabase
+          .from('mensajes_prestamo')
+          .select('id', { count: 'exact', head: true })
+          .in('prestamo_id', ids)
+          .neq('remitente_id', uid)
+          .eq('leido', false)
+
+        mensajesSinLeer = unreadCount || 0
+      }
+
+      setNotificacionesPrestamosCount((solicitudesPendientes || 0) + mensajesSinLeer)
     },
     [supabase]
   )
@@ -138,8 +157,11 @@ export default function Home() {
       setUser(user)
       if (user) {
         await Promise.all([sincronizarPerfilInicial(user), cargarDatos(user.id)])
-        // Si ya dio permiso anteriormente en este navegador, asegurar suscripción al día
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        if (
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted'
+        ) {
           activarNotificacionesPush(user.id).catch(() => {})
         }
       }
@@ -147,6 +169,29 @@ export default function Home() {
     }
     getUser()
   }, [supabase, cargarDatos, sincronizarPerfilInicial])
+
+  // Suscripción global en tiempo real para actualizar el globo de Préstamos al instante
+  useEffect(() => {
+    if (!user?.id) return
+
+    const channel = supabase
+      .channel(`badge-global-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mensajes_prestamo' },
+        () => cargarDatos(user.id)
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'prestamos' },
+        () => cargarDatos(user.id)
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user?.id, supabase, cargarDatos])
 
   const handleActivarNotificaciones = async () => {
     if (!user || activandoPush) return
@@ -430,9 +475,9 @@ export default function Home() {
           >
             <div className="relative">
               <ArrowLeftRight className="w-5 h-5" />
-              {pendientesCount > 0 && (
-                <span className="absolute -top-1.5 -right-2 bg-red-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                  {pendientesCount}
+              {notificacionesPrestamosCount > 0 && (
+                <span className="absolute -top-1.5 -right-2.5 bg-red-600 text-white text-[9px] font-bold min-w-[16px] h-4 px-1 rounded-full flex items-center justify-center shadow-xs">
+                  {notificacionesPrestamosCount > 99 ? '99+' : notificacionesPrestamosCount}
                 </span>
               )}
             </div>
