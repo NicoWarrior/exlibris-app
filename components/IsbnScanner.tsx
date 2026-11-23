@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client'
 import { normalizarGenero } from '@/utils/generos'
 import {
   Camera,
+  Check,
   Flashlight,
   Keyboard,
   Loader2,
@@ -20,6 +21,15 @@ interface IsbnScannerProps {
   onBookAdded: () => void
 }
 
+interface BorradorManual {
+  isbn: string
+  titulo: string
+  autor: string
+  portadaUrl: string
+  genero: string
+  sinopsis: string | null
+}
+
 export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScannerProps) {
   const supabase = createClient()
   const [modo, setModo] = useState<'camara' | 'manual'>('camara')
@@ -30,6 +40,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
   const [soportaLinterna, setSoportaLinterna] = useState(false)
   const [zoomActivo, setZoomActivo] = useState(false)
   const [soportaZoom, setSoportaZoom] = useState(false)
+  const [borradorManual, setBorradorManual] = useState<BorradorManual | null>(null)
 
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const videoTrackRef = useRef<MediaStreamTrack | null>(null)
@@ -60,6 +71,61 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     }
   }, [])
 
+  const guardarLibroEnEstanteria = useCallback(
+    async (datos: BorradorManual) => {
+      setProcesando(true)
+      try {
+        const { error: catError } = await supabase.from('libros_catalogo').upsert({
+          isbn: datos.isbn,
+          titulo: datos.titulo.trim(),
+          autor: datos.autor.trim(),
+          portada_url: datos.portadaUrl,
+          genero: datos.genero || 'Otros',
+          sinopsis: datos.sinopsis,
+        })
+
+        if (catError) throw catError
+
+        const { data: nuevoEjemplar, error: ejError } = await supabase
+          .from('ejemplares')
+          .insert({
+            isbn: datos.isbn,
+            propietario_id: userId,
+            estado: 'disponible',
+            visible_local: false,
+          })
+          .select('id')
+          .single()
+
+        if (ejError) throw ejError
+
+        if (nuevoEjemplar?.id) {
+          const { data: membresias } = await supabase
+            .from('miembros_club')
+            .select('club_id')
+            .eq('usuario_id', userId)
+
+          if (membresias && membresias.length > 0) {
+            await supabase.from('ejemplares_club').insert(
+              membresias.map((m) => ({
+                ejemplar_id: nuevoEjemplar.id,
+                club_id: m.club_id,
+              }))
+            )
+          }
+        }
+
+        onBookAdded()
+        onClose()
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Error al guardar el libro'
+        alert(msg)
+        setProcesando(false)
+      }
+    },
+    [supabase, userId, onBookAdded, onClose]
+  )
+
   const registrarLibroPorIsbn = useCallback(
     async (isbnCrudo: string) => {
       const isbn = isbnCrudo.replace(/[^0-9Xx]/g, '').toUpperCase()
@@ -74,15 +140,15 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       try {
         const { data: existente } = await supabase
           .from('libros_catalogo')
-          .select('isbn, titulo, autor')
+          .select('isbn, titulo, autor, portada_url, genero, sinopsis')
           .eq('isbn', isbn)
           .maybeSingle()
 
         let titulo = existente?.titulo || ''
         let autor = existente?.autor || ''
-        let portadaUrl = ''
-        let genero = 'Otros'
-        let sinopsis: string | null = null
+        let portadaUrl = existente?.portada_url || ''
+        let genero = existente?.genero || 'Otros'
+        let sinopsis: string | null = existente?.sinopsis || null
 
         const necesitaMetadatos =
           !existente ||
@@ -90,7 +156,10 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           autor === 'Autor desconocido'
 
         if (necesitaMetadatos) {
-          // 1. Intentar primero con Google Books
+          if (titulo.startsWith('Libro ISBN ')) titulo = ''
+          if (autor === 'Autor desconocido') autor = ''
+
+          // 1. Intentar Google Books
           try {
             const resGoogle = await fetch(
               `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
@@ -100,19 +169,19 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               const info = dataGoogle.items?.[0]?.volumeInfo
 
               if (info) {
-                titulo = info.title || ''
-                autor = Array.isArray(info.authors) ? info.authors.join(', ') : ''
+                titulo = info.title || titulo
+                autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
                 portadaUrl =
-                  info.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
+                  info.imageLinks?.thumbnail?.replace('http://', 'https://') || portadaUrl
                 genero = normalizarGenero(info.categories)
-                sinopsis = info.description || null
+                sinopsis = info.description || sinopsis
               }
             }
           } catch {
             // Continuar al fallback de Open Library
           }
 
-          // 2. Fallback a Open Library API si Google Books no devolvió título o autor
+          // 2. Fallback Open Library
           if (!titulo || !autor) {
             try {
               const resOL = await fetch(
@@ -146,67 +215,45 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 }
               }
             } catch {
-              // Si también falla Open Library, usamos valores por defecto
+              // Ignorar
             }
           }
+        }
 
-          const tituloFinal = titulo || `Libro ISBN ${isbn}`
-          const autorFinal = autor || 'Autor desconocido'
-          const portadaFinal =
-            portadaUrl ||
-            `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
+        const portadaFinal =
+          portadaUrl ||
+          `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
 
-          const { error: catError } = await supabase.from('libros_catalogo').upsert({
+        // Si ninguna fuente devolvió título o autor, pedirlos a mano al usuario
+        if (!titulo.trim() || !autor.trim()) {
+          setBorradorManual({
             isbn,
-            titulo: tituloFinal,
-            autor: autorFinal,
-            portada_url: portadaFinal,
+            titulo: titulo.trim(),
+            autor: autor.trim(),
+            portadaUrl: portadaFinal,
             genero,
             sinopsis,
           })
-
-          if (catError) throw catError
+          setProcesando(false)
+          return
         }
 
-        const { data: nuevoEjemplar, error: ejError } = await supabase
-          .from('ejemplares')
-          .insert({
-            isbn,
-            propietario_id: userId,
-            estado: 'disponible',
-            visible_local: false,
-          })
-          .select('id')
-          .single()
-
-        if (ejError) throw ejError
-
-        if (nuevoEjemplar?.id) {
-          const { data: membresias } = await supabase
-            .from('miembros_club')
-            .select('club_id')
-            .eq('usuario_id', userId)
-
-          if (membresias && membresias.length > 0) {
-            await supabase.from('ejemplares_club').insert(
-              membresias.map((m) => ({
-                ejemplar_id: nuevoEjemplar.id,
-                club_id: m.club_id,
-              }))
-            )
-          }
-        }
-
-        onBookAdded()
-        onClose()
+        await guardarLibroEnEstanteria({
+          isbn,
+          titulo,
+          autor,
+          portadaUrl: portadaFinal,
+          genero,
+          sinopsis,
+        })
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Error al guardar el libro'
+        const msg = err instanceof Error ? err.message : 'Error al buscar el libro'
         alert(msg)
         escaneadoRef.current = false
         setProcesando(false)
       }
     },
-    [supabase, userId, onBookAdded, onClose]
+    [supabase, guardarLibroEnEstanteria]
   )
 
   const registrarRef = useRef(registrarLibroPorIsbn)
@@ -215,7 +262,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
   }, [registrarLibroPorIsbn])
 
   useEffect(() => {
-    if (modo !== 'camara') return
+    if (modo !== 'camara' || borradorManual) return
 
     let montado = true
     escaneadoRef.current = false
@@ -313,7 +360,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               })
             }
           } catch {
-            // Algunos navegadores móviles ignoran constraints avanzados
+            // Ignorar
           }
         }
       } catch {
@@ -333,7 +380,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       setLinternaActiva(false)
       setZoomActivo(false)
     }
-  }, [modo, detenerCamaraSegura])
+  }, [modo, borradorManual, detenerCamaraSegura])
 
   const toggleLinterna = async () => {
     const track = videoTrackRef.current
@@ -408,7 +455,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         </div>
 
         <div className="p-4 space-y-4">
-          {!procesando && (
+          {!procesando && !borradorManual && (
             <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
               <button
                 type="button"
@@ -447,6 +494,73 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 Buscando ficha y portada del libro...
               </p>
             </div>
+          ) : borradorManual ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!borradorManual.titulo.trim() || !borradorManual.autor.trim()) return
+                guardarLibroEnEstanteria(borradorManual)
+              }}
+              className="space-y-3 py-1"
+            >
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
+                No hemos encontrado la ficha completa del ISBN{' '}
+                <strong>{borradorManual.isbn}</strong> en los catálogos externos. Complétala a mano para guardarlo:
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  Título del libro *
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={borradorManual.titulo}
+                  onChange={(e) =>
+                    setBorradorManual({ ...borradorManual, titulo: e.target.value })
+                  }
+                  placeholder="Ej. La muerte contada por un sapiens a un neandertal"
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  Autor o autores *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={borradorManual.autor}
+                  onChange={(e) =>
+                    setBorradorManual({ ...borradorManual, autor: e.target.value })
+                  }
+                  placeholder="Ej. Juan José Millás, Juan Luis Arsuaga"
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBorradorManual(null)
+                    escaneadoRef.current = false
+                  }}
+                  className="px-3.5 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  Volver
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Guardar en mi estantería</span>
+                </button>
+              </div>
+            </form>
           ) : modo === 'camara' ? (
             <div className="space-y-3">
               {errorCamara ? (

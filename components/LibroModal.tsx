@@ -12,6 +12,7 @@ import {
   Loader2,
   MapPin,
   MessageSquare,
+  Pencil,
   Send,
   Star,
   Tag,
@@ -81,8 +82,16 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [estado, setEstado] = useState(libro?.estado || 'disponible')
+  const [tituloActual, setTituloActual] = useState(libro?.titulo || '')
+  const [autorActual, setAutorActual] = useState(libro?.autor || '')
+  const [editandoMeta, setEditandoMeta] = useState(false)
+  const [guardandoMeta, setGuardandoMeta] = useState(false)
+
   const [genero, setGenero] = useState(libro?.genero || 'Otros')
   const [sinopsis, setSinopsis] = useState(libro?.sinopsis || '')
+  const [editandoSinopsis, setEditandoSinopsis] = useState(false)
+  const [guardandoSinopsis, setGuardandoSinopsis] = useState(false)
+
   const [premios, setPremios] = useState(libro?.premios || '')
   const [portadaActual, setPortadaActual] = useState(libro?.portada_url || '')
   const [subiendoPortada, setSubiendoPortada] = useState(false)
@@ -149,8 +158,12 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   useEffect(() => {
     if (!libro) return
     setEstado(libro.estado)
+    setTituloActual(libro.titulo)
+    setAutorActual(libro.autor)
+    setEditandoMeta(false)
     setGenero(libro.genero || 'Otros')
     setSinopsis(libro.sinopsis || '')
+    setEditandoSinopsis(false)
     setPremios(libro.premios || '')
     setPortadaActual(libro.portada_url || '')
     setMiPuntuacion(5)
@@ -211,11 +224,13 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
     cargarDatosModal()
 
+    const faltaTituloOAutor =
+      libro.titulo.startsWith('Libro ISBN ') || libro.autor === 'Autor desconocido'
     const faltaGeneroLimpio =
       !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
     const faltaPortada = !libro.portada_url
 
-    if (!libro.sinopsis || faltaGeneroLimpio || faltaPortada) {
+    if (!libro.sinopsis || faltaGeneroLimpio || faltaPortada || faltaTituloOAutor) {
       const enriquecerCatalogo = async () => {
         setCargandoExtra(true)
         try {
@@ -225,12 +240,54 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           const data = await res.json()
           const info = data.items?.[0]?.volumeInfo
 
+          let nuevoTitulo = libro.titulo
+          let nuevoAutor = libro.autor
           const nuevaSinopsis = libro.sinopsis || info?.description || ''
-          const nuevoGenero = faltaGeneroLimpio
+          let nuevoGenero = faltaGeneroLimpio
             ? normalizarGenero(info?.categories)
             : (libro.genero as string)
           const nuevosPremios =
             libro.premios || extraerPremios(info?.categories, info?.description) || ''
+
+          if (info?.title && nuevoTitulo.startsWith('Libro ISBN ')) {
+            nuevoTitulo = info.title
+          }
+          if (Array.isArray(info?.authors) && info.authors.length > 0 && nuevoAutor === 'Autor desconocido') {
+            nuevoAutor = info.authors.join(', ')
+          }
+
+          if (nuevoTitulo.startsWith('Libro ISBN ') || nuevoAutor === 'Autor desconocido') {
+            const resOL = await fetch(
+              `https://openlibrary.org/api/books?bibkeys=ISBN:${libro.isbn}&format=json&jscmd=data`
+            )
+            if (resOL.ok) {
+              const dataOL = await resOL.json()
+              const libroOL = dataOL[`ISBN:${libro.isbn}`]
+              if (libroOL) {
+                if (nuevoTitulo.startsWith('Libro ISBN ') && libroOL.title) {
+                  nuevoTitulo = libroOL.subtitle
+                    ? `${libroOL.title}: ${libroOL.subtitle}`
+                    : libroOL.title
+                }
+                if (
+                  nuevoAutor === 'Autor desconocido' &&
+                  Array.isArray(libroOL.authors) &&
+                  libroOL.authors.length > 0
+                ) {
+                  nuevoAutor = libroOL.authors
+                    .map((a: { name?: string }) => a.name)
+                    .filter(Boolean)
+                    .join(', ')
+                }
+                if (nuevoGenero === 'Otros' && Array.isArray(libroOL.subjects)) {
+                  const temas = libroOL.subjects
+                    .map((s: { name?: string }) => s.name)
+                    .filter(Boolean)
+                  nuevoGenero = normalizarGenero(temas)
+                }
+              }
+            }
+          }
 
           const portadaGoogle =
             info?.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
@@ -240,11 +297,15 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             : libro.portada_url
 
           if (
+            nuevoTitulo !== libro.titulo ||
+            nuevoAutor !== libro.autor ||
             nuevaSinopsis !== (libro.sinopsis || '') ||
             nuevoGenero !== (libro.genero || 'Otros') ||
             nuevosPremios !== (libro.premios || '') ||
             nuevaPortada !== libro.portada_url
           ) {
+            setTituloActual(nuevoTitulo)
+            setAutorActual(nuevoAutor)
             setSinopsis(nuevaSinopsis)
             setGenero(nuevoGenero)
             setPremios(nuevosPremios)
@@ -252,6 +313,8 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             await supabase
               .from('libros_catalogo')
               .update({
+                titulo: nuevoTitulo,
+                autor: nuevoAutor,
                 sinopsis: nuevaSinopsis || null,
                 genero: nuevoGenero || 'Otros',
                 premios: nuevosPremios || null,
@@ -281,6 +344,49 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   }, [currentUserId, resenas])
 
   if (!libro) return null
+
+  const guardarTituloAutor = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (guardandoMeta) return
+    const t = tituloActual.trim()
+    const a = autorActual.trim()
+    if (!t || !a) return
+
+    setGuardandoMeta(true)
+    const { error } = await supabase
+      .from('libros_catalogo')
+      .update({ titulo: t, autor: a })
+      .eq('isbn', libro.isbn)
+
+    setGuardandoMeta(false)
+    if (!error) {
+      setEditandoMeta(false)
+      onActualizado()
+    } else {
+      alert(`No se pudo actualizar la ficha: ${error.message}`)
+    }
+  }
+
+  const guardarSinopsisManual = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (guardandoSinopsis) return
+    setGuardandoSinopsis(true)
+
+    const textoLimpio = sinopsis.trim()
+    const { error } = await supabase
+      .from('libros_catalogo')
+      .update({ sinopsis: textoLimpio || null })
+      .eq('isbn', libro.isbn)
+
+    setGuardandoSinopsis(false)
+    if (!error) {
+      setSinopsis(textoLimpio)
+      setEditandoSinopsis(false)
+      onActualizado()
+    } else {
+      alert(`No se pudo guardar la sinopsis: ${error.message}`)
+    }
+  }
 
   const subirFotoPortada = async (file: File) => {
     if (subiendoPortada) return
@@ -465,7 +571,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
               {portadaActual ? (
                 <img
                   src={portadaActual}
-                  alt={libro.titulo}
+                  alt={tituloActual}
                   className="w-full h-full object-cover"
                 />
               ) : (
@@ -502,9 +608,66 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
               )}
             </div>
 
-            <div className="space-y-1.5 flex-1">
-              <h2 className="font-bold text-stone-900 text-base leading-snug">{libro.titulo}</h2>
-              <p className="text-sm text-stone-600 font-medium">{libro.autor}</p>
+            <div className="space-y-1.5 flex-1 min-w-0">
+              {editandoMeta ? (
+                <form onSubmit={guardarTituloAutor} className="space-y-2">
+                  <input
+                    type="text"
+                    required
+                    value={tituloActual}
+                    onChange={(e) => setTituloActual(e.target.value)}
+                    placeholder="Título del libro"
+                    className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-300 rounded-lg text-xs font-bold text-stone-900 focus:outline-none focus:border-emerald-600"
+                  />
+                  <input
+                    type="text"
+                    required
+                    value={autorActual}
+                    onChange={(e) => setAutorActual(e.target.value)}
+                    placeholder="Autor o autores"
+                    className="w-full px-2.5 py-1.5 bg-stone-50 border border-stone-300 rounded-lg text-xs text-stone-700 focus:outline-none focus:border-emerald-600"
+                  />
+                  <div className="flex gap-1.5">
+                    <button
+                      type="submit"
+                      disabled={guardandoMeta}
+                      className="px-2.5 py-1 bg-emerald-700 text-white rounded-lg text-[11px] font-semibold cursor-pointer"
+                    >
+                      {guardandoMeta ? 'Guardando...' : 'Guardar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTituloActual(libro.titulo)
+                        setAutorActual(libro.autor)
+                        setEditandoMeta(false)
+                      }}
+                      className="px-2.5 py-1 bg-stone-100 text-stone-600 rounded-lg text-[11px] font-medium cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="font-bold text-stone-900 text-base leading-snug">
+                      {tituloActual}
+                    </h2>
+                    <p className="text-sm text-stone-600 font-medium mt-0.5">{autorActual}</p>
+                  </div>
+                  {libro.esPropio && (
+                    <button
+                      type="button"
+                      onClick={() => setEditandoMeta(true)}
+                      title="Editar título y autor"
+                      className="p-1.5 text-stone-500 hover:text-emerald-700 bg-stone-100 hover:bg-emerald-50 rounded-lg shrink-0 cursor-pointer transition"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
                 {libro.esPropio ? (
@@ -552,12 +715,56 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100">
-            <h3 className="text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-              <BookOpen className="w-3.5 h-3.5 text-emerald-700" />
-              Sinopsis
-            </h3>
-            {cargandoExtra ? (
+          {/* SINOPSIS EDITABLE */}
+          <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-stone-700 uppercase tracking-wider flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Sinopsis</span>
+              </h3>
+              {libro.esPropio && !editandoSinopsis && (
+                <button
+                  type="button"
+                  onClick={() => setEditandoSinopsis(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                >
+                  <Pencil className="w-3 h-3" />
+                  <span>{sinopsis ? 'Editar' : 'Añadir'}</span>
+                </button>
+              )}
+            </div>
+
+            {editandoSinopsis ? (
+              <form onSubmit={guardarSinopsisManual} className="space-y-2">
+                <textarea
+                  rows={4}
+                  maxLength={2500}
+                  value={sinopsis}
+                  onChange={(e) => setSinopsis(e.target.value)}
+                  placeholder="Escribe o pega aquí la sinopsis de la contraportada..."
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+                />
+                <div className="flex justify-end gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSinopsis(libro.sinopsis || '')
+                      setEditandoSinopsis(false)
+                    }}
+                    className="px-3 py-1.5 bg-stone-200/70 text-stone-700 rounded-lg text-[11px] font-medium cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={guardandoSinopsis}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {guardandoSinopsis ? 'Guardando...' : 'Guardar sinopsis'}
+                  </button>
+                </div>
+              </form>
+            ) : cargandoExtra ? (
               <p className="text-xs text-stone-400 italic">Buscando datos del libro...</p>
             ) : sinopsis ? (
               <p className="text-xs text-stone-600 leading-relaxed whitespace-pre-line">
