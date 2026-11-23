@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { createClient } from '@/utils/supabase/client'
-import { Camera, CheckCircle2, Loader2, Search, X } from 'lucide-react'
 import { extraerPremios, normalizarGenero } from '@/utils/generos'
 import { Award, Camera, CheckCircle2, Loader2, Search, X } from 'lucide-react'
 
