@@ -346,6 +346,9 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               required
             />
             <button
-              type="submit"
-              disabled={procesando}
-              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold cursor-pointer
+                type="submit"
+                disabled={procesando}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold cursor-pointer"
+            >
+                Crear
+            </button>
