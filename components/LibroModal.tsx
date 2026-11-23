@@ -222,10 +222,12 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       setVisibleLocal(false)
     }
 
-    // 3. Autorelleno desde Google Books para ejemplares sin sinopsis o con género sin normalizar
+    // 3. Autorelleno desde Google Books para ejemplares sin portada, sinopsis o con género sin normalizar
     const faltaGeneroLimpio =
       !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
-    if (!libro.sinopsis || faltaGeneroLimpio) {
+    const faltaPortada = !libro.portada_url
+
+    if (!libro.sinopsis || faltaGeneroLimpio || faltaPortada) {
       const enriquecerCatalogo = async () => {
         setCargandoExtra(true)
         try {
@@ -234,32 +236,39 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           )
           const data = await res.json()
           const info = data.items?.[0]?.volumeInfo
-          if (info) {
-            const nuevaSinopsis = libro.sinopsis || info.description || ''
-            const nuevoGenero = faltaGeneroLimpio
-              ? normalizarGenero(info.categories)
-              : (libro.genero as string)
-            const nuevosPremios =
-              libro.premios || extraerPremios(info.categories, info.description) || ''
 
-            if (
-              nuevaSinopsis !== (libro.sinopsis || '') ||
-              nuevoGenero !== (libro.genero || 'Otros') ||
-              nuevosPremios !== (libro.premios || '')
-            ) {
-              setSinopsis(nuevaSinopsis)
-              setGenero(nuevoGenero)
-              setPremios(nuevosPremios)
-              await supabase
-                .from('libros_catalogo')
-                .update({
-                  sinopsis: nuevaSinopsis || null,
-                  genero: nuevoGenero || 'Otros',
-                  premios: nuevosPremios || null,
-                })
-                .eq('isbn', libro.isbn)
-              onActualizado()
-            }
+          const nuevaSinopsis = libro.sinopsis || info?.description || ''
+          const nuevoGenero = faltaGeneroLimpio
+            ? normalizarGenero(info?.categories)
+            : (libro.genero as string)
+          const nuevosPremios =
+            libro.premios || extraerPremios(info?.categories, info?.description) || ''
+
+          const portadaGoogle =
+            info?.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
+          const nuevaPortada = faltaPortada
+            ? portadaGoogle || `https://covers.openlibrary.org/b/isbn/${libro.isbn}-M.jpg?default=false`
+            : libro.portada_url
+
+          if (
+            nuevaSinopsis !== (libro.sinopsis || '') ||
+            nuevoGenero !== (libro.genero || 'Otros') ||
+            nuevosPremios !== (libro.premios || '') ||
+            nuevaPortada !== libro.portada_url
+          ) {
+            setSinopsis(nuevaSinopsis)
+            setGenero(nuevoGenero)
+            setPremios(nuevosPremios)
+            await supabase
+              .from('libros_catalogo')
+              .update({
+                sinopsis: nuevaSinopsis || null,
+                genero: nuevoGenero || 'Otros',
+                premios: nuevosPremios || null,
+                portada_url: nuevaPortada || '',
+              })
+              .eq('isbn', libro.isbn)
+            onActualizado()
           }
         } catch {
           // Ignorar fallo de red secundario
