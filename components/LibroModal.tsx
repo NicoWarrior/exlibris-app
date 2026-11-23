@@ -3,7 +3,21 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { extraerPremios, GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
-import { Award, BookOpen, Check, Pencil, RefreshCw, Tag, Trash2, User, X } from 'lucide-react'
+import {
+  Award,
+  BookOpen,
+  Check,
+  Eye,
+  EyeOff,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  Tag,
+  Trash2,
+  User,
+  Users,
+  X,
+} from 'lucide-react'
 
 export interface LibroDetalle {
   ejemplarId: string
@@ -17,6 +31,11 @@ export interface LibroDetalle {
   genero?: string | null
   sinopsis?: string | null
   premios?: string | null
+}
+
+interface ClubOpcion {
+  id: string
+  nombre: string
 }
 
 interface LibroModalProps {
@@ -35,6 +54,12 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [cargandoExtra, setCargandoExtra] = useState(false)
   const [procesando, setProcesando] = useState(false)
 
+  // Gestión de visibilidad en clubes (solo si esPropio)
+  const [misClubes, setMisClubes] = useState<ClubOpcion[]>([])
+  const [clubesCompartidos, setClubesCompartidos] = useState<string[]>([])
+  const [cargandoClubes, setCargandoClubes] = useState(false)
+  const [togglingClubId, setTogglingClubId] = useState<string | null>(null)
+
   useEffect(() => {
     if (!libro) return
     setEstado(libro.estado)
@@ -43,12 +68,55 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setPremios(libro.premios || '')
     setEditando(false)
 
-    const faltaGeneroLimpio = !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
+    // 1. Si el libro es propio, cargar los clubes del usuario y en cuáles está compartido este ejemplar
+    if (libro.esPropio) {
+      const cargarVisibilidadClubes = async () => {
+        setCargandoClubes(true)
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+
+        if (user) {
+          const { data: membresias } = await supabase
+            .from('miembros_club')
+            .select('club_id')
+            .eq('usuario_id', user.id)
+
+          if (membresias && membresias.length > 0) {
+            const clubIds = membresias.map((m) => m.club_id)
+            const [{ data: clubesData }, { data: compartidosData }] = await Promise.all([
+              supabase.from('clubes').select('id, nombre').in('id', clubIds),
+              supabase
+                .from('ejemplares_club')
+                .select('club_id')
+                .eq('ejemplar_id', libro.ejemplarId),
+            ])
+
+            setMisClubes(clubesData || [])
+            setClubesCompartidos(compartidosData?.map((c) => c.club_id) || [])
+          } else {
+            setMisClubes([])
+            setClubesCompartidos([])
+          }
+        }
+        setCargandoClubes(false)
+      }
+      cargarVisibilidadClubes()
+    } else {
+      setMisClubes([])
+      setClubesCompartidos([])
+    }
+
+    // 2. Autorelleno desde Google Books para ejemplares sin sinopsis o con género sin normalizar
+    const faltaGeneroLimpio =
+      !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
     if (!libro.sinopsis || faltaGeneroLimpio) {
       const enriquecerCatalogo = async () => {
         setCargandoExtra(true)
         try {
-          const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${libro.isbn}`)
+          const res = await fetch(
+            `https://www.googleapis.com/books/v1/volumes?q=isbn:${libro.isbn}`
+          )
           const data = await res.json()
           const info = data.items?.[0]?.volumeInfo
           if (info) {
@@ -89,6 +157,46 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   }, [libro, supabase, onActualizado])
 
   if (!libro) return null
+
+  const alternarClub = async (clubId: string) => {
+    if (!libro.esPropio || togglingClubId) return
+    setTogglingClubId(clubId)
+
+    const yaCompartido = clubesCompartidos.includes(clubId)
+
+    if (yaCompartido) {
+      // Quitar de este club
+      setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
+      const { error } = await supabase
+        .from('ejemplares_club')
+        .delete()
+        .eq('ejemplar_id', libro.ejemplarId)
+        .eq('club_id', clubId)
+
+      if (error) {
+        alert(`No se pudo ocultar del club: ${error.message}`)
+        setClubesCompartidos((prev) => [...prev, clubId])
+      } else {
+        onActualizado()
+      }
+    } else {
+      // Compartir en este club
+      setClubesCompartidos((prev) => [...prev, clubId])
+      const { error } = await supabase.from('ejemplares_club').insert({
+        ejemplar_id: libro.ejemplarId,
+        club_id: clubId,
+      })
+
+      if (error) {
+        alert(`No se pudo compartir en el club: ${error.message}`)
+        setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
+      } else {
+        onActualizado()
+      }
+    }
+
+    setTogglingClubId(null)
+  }
 
   const guardarMetadatos = async () => {
     if (!libro.esPropio || procesando) return
@@ -183,6 +291,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         </div>
 
         <div className="p-5 space-y-5">
+          {/* Cabecera portada + metadatos */}
           <div className="flex gap-4">
             <div className="w-24 sm:w-28 aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-xs">
               {libro.portada_url ? (
@@ -248,6 +357,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
+          {/* Formulario edición o Sinopsis */}
           {editando ? (
             <div className="bg-stone-50 rounded-xl p-4 border border-stone-200 space-y-3">
               <div>
@@ -327,6 +437,71 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           )}
 
+          {/* Visibilidad selectiva por club (solo para el propietario) */}
+          {libro.esPropio && !editando && (
+            <div className="bg-stone-50 rounded-xl p-4 border border-stone-200/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-stone-400" />
+                  <span>Visible en mis clubes</span>
+                </h3>
+                <span className="text-[11px] text-stone-400">
+                  {clubesCompartidos.length === 0
+                    ? 'Solo en tu estantería'
+                    : `${clubesCompartidos.length} ${
+                        clubesCompartidos.length === 1 ? 'club' : 'clubes'
+                      }`}
+                </span>
+              </div>
+
+              {cargandoClubes ? (
+                <p className="text-xs text-stone-400 italic">Cargando clubes...</p>
+              ) : misClubes.length === 0 ? (
+                <p className="text-xs text-stone-500">
+                  Aún no perteneces a ningún club. Únete o crea uno en la pestaña Clubes.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {misClubes.map((club) => {
+                    const activo = clubesCompartidos.includes(club.id)
+                    const cargandoEste = togglingClubId === club.id
+                    return (
+                      <button
+                        key={club.id}
+                        type="button"
+                        onClick={() => alternarClub(club.id)}
+                        disabled={cargandoEste}
+                        className={`w-full px-3 py-2 rounded-lg border text-xs font-medium flex items-center justify-between transition cursor-pointer ${
+                          activo
+                            ? 'bg-emerald-50/80 border-emerald-300 text-emerald-900'
+                            : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
+                        }`}
+                      >
+                        <span className="truncate">{club.nombre}</span>
+                        <span className="flex items-center gap-1.5 shrink-0 text-[11px]">
+                          {cargandoEste ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-stone-400" />
+                          ) : activo ? (
+                            <>
+                              <Eye className="w-3.5 h-3.5 text-emerald-700" />
+                              <span className="font-semibold text-emerald-700">Visible</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3.5 h-3.5 text-stone-400" />
+                              <span className="text-stone-400">Oculto</span>
+                            </>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Controles de disponibilidad y borrado */}
           {libro.esPropio && !editando && (
             <div className="pt-1 flex flex-col sm:flex-row gap-2.5">
               <button

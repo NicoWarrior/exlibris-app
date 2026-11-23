@@ -104,37 +104,38 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       setGeneroFiltro('Todos')
       setBusqueda('')
 
-      // 1. Obtener miembros del club desde miembros_club
-      const { data: miembros } = await supabase
-        .from('miembros_club')
-        .select('usuario_id')
+      // 1. Obtener los IDs de ejemplares compartidos explícitamente en este club
+      const { data: compartidos } = await supabase
+        .from('ejemplares_club')
+        .select('ejemplar_id')
         .eq('club_id', clubId)
 
-      if (!miembros || miembros.length === 0) {
+      if (!compartidos || compartidos.length === 0) {
         setLibrosClub([])
         setCargandoLibros(false)
         return
       }
 
-      const memberIds = miembros.map((m) => m.usuario_id)
+      const ejemplarIds = compartidos.map((c) => c.ejemplar_id)
 
-      // 2. Obtener nombres desde perfiles
-      const { data: perfilesData } = await supabase
-        .from('perfiles')
-        .select('id, nombre, nombre_usuario')
-        .in('id', memberIds)
-
-      // 3. Obtener ejemplares de todos los miembros del club
+      // 2. Obtener los datos de esos ejemplares concretos
       const { data: ejemplaresData } = await supabase
         .from('ejemplares')
         .select('id, isbn, estado, propietario_id')
-        .in('propietario_id', memberIds)
+        .in('id', ejemplarIds)
 
       if (!ejemplaresData || ejemplaresData.length === 0) {
         setLibrosClub([])
         setCargandoLibros(false)
         return
       }
+
+      // 3. Obtener nombres de los propietarios desde perfiles
+      const ownerIds = Array.from(new Set(ejemplaresData.map((e) => e.propietario_id)))
+      const { data: perfilesData } = await supabase
+        .from('perfiles')
+        .select('id, nombre, nombre_usuario')
+        .in('id', ownerIds)
 
       // 4. Obtener metadatos enriquecidos del catálogo
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
@@ -533,6 +534,10 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
               Cargando biblioteca del club...
+            </div>
+          ) : librosClub.length === 0 ? (
+            <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-xs text-stone-500">
+              Aún no hay libros compartidos en este club. Abre cualquier libro de tu Estantería para activarlo aquí.
             </div>
           ) : librosFiltrados.length === 0 ? (
             <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-xs text-stone-500">
