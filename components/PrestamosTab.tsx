@@ -70,7 +70,13 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [cargandoChat, setCargandoChat] = useState(false)
   const [nuevoMensaje, setNuevoMensaje] = useState('')
   const [enviandoMensaje, setEnviandoMensaje] = useState(false)
+
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
+  const onCambioEstadoRef = useRef(onCambioEstado)
+
+  useEffect(() => {
+    onCambioEstadoRef.current = onCambioEstado
+  }, [onCambioEstado])
 
   const cargarPrestamos = useCallback(async () => {
     setCargando(true)
@@ -181,7 +187,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     cargarPrestamos()
   }, [cargarPrestamos])
 
-  // Escuchar nuevos mensajes entrantes mientras la pestaña Préstamos está abierta
   useEffect(() => {
     const channel = supabase
       .channel(`prestamos-unread-${userId}`)
@@ -400,7 +405,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         url: '/',
       })
       await cargarPrestamos()
-      onCambioEstado()
+      onCambioEstadoRef.current()
     }
   }
 
@@ -426,7 +431,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         })
       }
       await cargarPrestamos()
-      onCambioEstado()
+      onCambioEstadoRef.current()
     }
   }
 
@@ -459,7 +464,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         url: '/',
       })
       await cargarPrestamos()
-      onCambioEstado()
+      onCambioEstadoRef.current()
     }
   }
 
@@ -898,7 +903,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                           )
                         })
                       )}
-                      <div ref={mensajesEndRef} />
                     </div>
 
                     <form onSubmit={enviarMensaje} className="flex gap-2">
