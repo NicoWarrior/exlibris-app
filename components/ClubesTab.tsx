@@ -131,6 +131,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         setCargandoLibros(false)
         return
       }
+      
 
       const ownerIds = Array.from(new Set(ejemplaresData.map((e) => e.propietario_id)))
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
@@ -180,6 +181,23 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             premios: null,
           },
         }
+      })
+
+      combinados.sort((a, b) => {
+        // 1. Amigos y familiares primero; los tuyos al final
+        const esMioA = a.propietario_id === userId ? 1 : 0
+        const esMioB = b.propietario_id === userId ? 1 : 0
+        if (esMioA !== esMioB) return esMioA - esMioB
+
+        // 2. Disponibles arriba dentro de cada grupo
+        const dispA = a.estado === 'disponible' ? 0 : 1
+        const dispB = b.estado === 'disponible' ? 0 : 1
+        if (dispA !== dispB) return dispA - dispB
+
+        // 3. Orden alfabético por título
+        const tituloA = a.libros_catalogo?.titulo || ''
+        const tituloB = b.libros_catalogo?.titulo || ''
+        return tituloA.localeCompare(tituloB, 'es')
       })
 
       setLibrosClub(combinados)
