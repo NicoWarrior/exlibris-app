@@ -6,6 +6,7 @@ import { GENEROS_ESTANDAR } from '@/utils/generos'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
+import MapaPuntosExlibris from '@/components/MapaPuntosExlibris'
 import {
   Award,
   BookOpen,
@@ -58,6 +59,7 @@ export default function ExplorarLocalTab({
   const [cargandoPerfil, setCargandoPerfil] = useState(true)
   const [cargandoLibros, setCargandoLibros] = useState(false)
   const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
+  const [mostrarMapa, setMostrarMapa] = useState(false)
 
   const buscarEnCodigoPostal = useCallback(
     async (cp: string) => {
@@ -287,6 +289,23 @@ const solicitarPrestamoLocal = async (ejemplar: EjemplarLocal) => {
         </div>
       ) : (
         <>
+        <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setMostrarMapa((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              <span>{mostrarMapa ? 'Ocultar mapa' : 'Puntos de intercambio'}</span>
+            </button>
+          </div>
+
+          {mostrarMapa && (
+            <MapaPuntosExlibris
+              codigoPostalInicial={cpActual}
+              onClose={() => setMostrarMapa(false)}
+            />
+          )}
           {/* Filtro de texto y géneros cuando hay libros en el CP */}
           {librosZona.length > 0 && (
             <div className="space-y-3">

@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
+import MapaPuntosExlibris, { PuntoExlibris } from '@/components/MapaPuntosExlibris'
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -18,6 +19,7 @@ import {
   RotateCcw,
   Send,
   X,
+  MapPin,
 } from 'lucide-react'
 
 interface PrestamoItem {
@@ -74,6 +76,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
 
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const onCambioEstadoRef = useRef(onCambioEstado)
+  const [mostrarSelectorPunto, setMostrarSelectorPunto] = useState(false)
 
   useEffect(() => {
     onCambioEstadoRef.current = onCambioEstado
@@ -900,7 +903,32 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         })
                       )}
                     </div>
+                    <div className="flex justify-end mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setMostrarSelectorPunto((prev) => !prev)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
+                    >
+                      <MapPin className="w-3.5 h-3.5" />
+                      <span>{mostrarSelectorPunto ? 'Cerrar mapa' : 'Proponer Punto Exlibris'}</span>
+                    </button>
+                  </div>
 
+                  {mostrarSelectorPunto && (
+                    <div className="mb-3">
+                      <MapaPuntosExlibris
+                        modoSelector
+                        onClose={() => setMostrarSelectorPunto(false)}
+                        onSeleccionarPunto={(punto: PuntoExlibris) => {
+                          const textoPunto = `📍 Propongo quedar en el Punto Exlibris: ${punto.nombre} (${punto.direccion}, CP ${punto.codigo_postal})${
+                            punto.horario_orientativo ? ` · Horario: ${punto.horario_orientativo}` : ''
+                          }`
+                          setNuevoMensaje(textoPunto)
+                          setMostrarSelectorPunto(false)
+                        }}
+                      />
+                    </div>
+                  )}
                     <form onSubmit={enviarMensaje} className="flex gap-2">
                       <input
                         type="text"
