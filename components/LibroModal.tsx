@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
 import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
@@ -94,8 +94,8 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [guardandoSinopsis, setGuardandoSinopsis] = useState(false)
 
   const [premios, setPremios] = useState(libro?.premios || '')
-  const [portadaRota, setPortadaRota] = useState(false)
   const [portadaActual, setPortadaActual] = useState(libro?.portada_url || '')
+  const [portadaRota, setPortadaRota] = useState(false)
   const [subiendoPortada, setSubiendoPortada] = useState(false)
   const [cargandoExtra, setCargandoExtra] = useState(false)
 
@@ -110,6 +110,13 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [miPuntuacion, setMiPuntuacion] = useState<number>(5)
   const [miComentario, setMiComentario] = useState('')
   const [guardandoResena, setGuardandoResena] = useState(false)
+
+  const onActualizadoRef = useRef(onActualizado)
+  useEffect(() => {
+    onActualizadoRef.current = onActualizado
+  }, [onActualizado])
+
+  const enriquecidoIsbnRef = useRef<string | null>(null)
 
   const cargarResenas = useCallback(
     async (isbn: string, clubId?: string | null) => {
@@ -168,6 +175,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setEditandoSinopsis(false)
     setPremios(libro.premios || '')
     setPortadaActual(libro.portada_url || '')
+    setPortadaRota(false)
     setMiPuntuacion(5)
     setMiComentario('')
 
@@ -232,7 +240,11 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       !libro.genero || libro.genero === 'Otros' || libro.genero.includes('/')
     const faltaPortada = !libro.portada_url
 
-    if (!libro.sinopsis || faltaGeneroLimpio || faltaPortada || faltaTituloOAutor) {
+    if (
+      enriquecidoIsbnRef.current !== libro.isbn &&
+      (!libro.sinopsis || faltaGeneroLimpio || faltaPortada || faltaTituloOAutor)
+    ) {
+      enriquecidoIsbnRef.current = libro.isbn
       const enriquecerCatalogo = async () => {
         setCargandoExtra(true)
         try {
@@ -254,7 +266,11 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           if (info?.title && nuevoTitulo.startsWith('Libro ISBN ')) {
             nuevoTitulo = info.title
           }
-          if (Array.isArray(info?.authors) && info.authors.length > 0 && nuevoAutor === 'Autor desconocido') {
+          if (
+            Array.isArray(info?.authors) &&
+            info.authors.length > 0 &&
+            nuevoAutor === 'Autor desconocido'
+          ) {
             nuevoAutor = info.authors.join(', ')
           }
 
@@ -292,10 +308,9 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           }
 
           const portadaGoogle =
-            info?.imageLinks?.thumbnail?.replace('http://', 'https://') || ''
+            info?.imageLinks?.thumbnail?.replace('http://', 'https://').replace('&edge=curl', '') || ''
           const nuevaPortada = faltaPortada
-            ? portadaGoogle ||
-              `https://covers.openlibrary.org/b/isbn/${libro.isbn}-M.jpg?default=false`
+            ? portadaGoogle || `https://covers.openlibrary.org/b/isbn/${libro.isbn}-M.jpg`
             : libro.portada_url
 
           if (
@@ -323,7 +338,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                 portada_url: nuevaPortada || '',
               })
               .eq('isbn', libro.isbn)
-            onActualizado()
+            onActualizadoRef.current()
           }
         } catch {
           // Ignorar fallo secundario
@@ -333,7 +348,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       }
       enriquecerCatalogo()
     }
-  }, [libro, supabase, cargarResenas, onActualizado])
+  }, [libro, supabase, cargarResenas])
 
   useEffect(() => {
     if (currentUserId && resenas.length > 0) {
@@ -363,7 +378,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setGuardandoMeta(false)
     if (!error) {
       setEditandoMeta(false)
-      onActualizado()
+      onActualizadoRef.current()
     } else {
       alert(`No se pudo actualizar la ficha: ${error.message}`)
     }
@@ -384,7 +399,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     if (!error) {
       setSinopsis(textoLimpio)
       setEditandoSinopsis(false)
-      onActualizado()
+      onActualizadoRef.current()
     } else {
       alert(`No se pudo guardar la sinopsis: ${error.message}`)
     }
@@ -421,7 +436,8 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       if (dbError) throw dbError
 
       setPortadaActual(nuevaUrl)
-      onActualizado()
+      setPortadaRota(false)
+      onActualizadoRef.current()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido'
       alert(`No se pudo guardar la portada: ${msg}`)
@@ -437,7 +453,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       .update({ estado: nuevoEstado })
       .eq('id', libro.ejemplarId)
 
-    if (!error) onActualizado()
+    if (!error) onActualizadoRef.current()
   }
 
   const cambiarGeneroManual = async (nuevoGenero: string) => {
@@ -447,7 +463,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       .update({ genero: nuevoGenero })
       .eq('isbn', libro.isbn)
 
-    if (!error) onActualizado()
+    if (!error) onActualizadoRef.current()
   }
 
   const toggleClub = async (clubId: string) => {
@@ -464,7 +480,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
       if (!error) {
         setClubesCompartidos((prev) => prev.filter((id) => id !== clubId))
-        onActualizado()
+        onActualizadoRef.current()
       }
     } else {
       const { error } = await supabase
@@ -473,7 +489,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
       if (!error) {
         setClubesCompartidos((prev) => [...prev, clubId])
-        onActualizado()
+        onActualizadoRef.current()
       }
     }
     setGuardandoVisibilidad(false)
@@ -497,7 +513,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
     if (!error) {
       setVisibleLocal(nuevoValor)
-      onActualizado()
+      onActualizadoRef.current()
     } else {
       alert(`No se pudo cambiar la visibilidad local: ${error.message}`)
     }
@@ -525,7 +541,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       alert(`No se pudo guardar la reseña: ${error.message}`)
     } else {
       await cargarResenas(libro.isbn, libro.clubId)
-      onActualizado()
+      onActualizadoRef.current()
     }
   }
 
@@ -533,7 +549,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     if (!confirm('¿Seguro que quieres quitar este libro de tu estantería?')) return
     const { error } = await supabase.from('ejemplares').delete().eq('id', libro.ejemplarId)
     if (!error) {
-      onActualizado()
+      onActualizadoRef.current()
       onClose()
     }
   }
@@ -543,7 +559,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       ? (resenas.reduce((acc, r) => acc + r.puntuacion, 0) / resenas.length).toFixed(1)
       : null
 
-  const puedeEditarPortada = libro.esPropio || !portadaActual
+  const puedeEditarPortada = libro.esPropio || !portadaActual || portadaRota
 
   return (
     <div
@@ -711,7 +727,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          {/* SINOPSIS EDITABLE */}
           <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-stone-700 uppercase tracking-wider flex items-center gap-1.5">
