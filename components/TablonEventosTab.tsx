@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import {
   BookOpen,
@@ -10,6 +10,7 @@ import {
   MapPin,
   Megaphone,
   Plus,
+  ShieldCheck,
   ShoppingBag,
   Sparkles,
   Trash2,
@@ -27,6 +28,7 @@ interface EventoLiterario {
   fecha_evento: string
   enlace_info: string | null
   creado_por: string
+  es_oficial?: boolean
   autor_nombre?: string
 }
 
@@ -59,6 +61,8 @@ export default function TablonEventosTab({
   const [verTodosCp, setVerTodosCp] = useState<boolean>(!codigoPostalUsuario)
   const [categoriaFiltro, setCategoriaFiltro] = useState<string>('todas')
 
+  const cpInicializadoRef = useRef(Boolean(codigoPostalUsuario))
+
   // Formulario de nuevo anuncio
   const [mostrandoForm, setMostrandoForm] = useState(false)
   const [titulo, setTitulo] = useState('')
@@ -71,12 +75,13 @@ export default function TablonEventosTab({
   const [guardando, setGuardando] = useState(false)
 
   useEffect(() => {
-    if (codigoPostalUsuario && !cpFiltro) {
+    if (codigoPostalUsuario && !cpInicializadoRef.current) {
+      cpInicializadoRef.current = true
       setCpFiltro(codigoPostalUsuario)
       setCpNuevo(codigoPostalUsuario)
       setVerTodosCp(false)
     }
-  }, [codigoPostalUsuario, cpFiltro])
+  }, [codigoPostalUsuario])
 
   const cargarEventos = useCallback(async () => {
     setCargando(true)
@@ -85,7 +90,6 @@ export default function TablonEventosTab({
     } = await supabase.auth.getUser()
     if (user) setCurrentUserId(user.id)
 
-    // Mostrar eventos desde hace 6 horas en adelante para que no desaparezcan en mitad del evento
     const limitePasado = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
 
     let query = supabase
@@ -94,8 +98,15 @@ export default function TablonEventosTab({
       .gte('fecha_evento', limitePasado)
       .order('fecha_evento', { ascending: true })
 
-    if (!verTodosCp && cpFiltro.trim().length >= 4) {
-      query = query.eq('codigo_postal', cpFiltro.trim())
+    const cpLimpio = cpFiltro.trim()
+
+    if (verTodosCp) {
+      // Si hay al menos 2 dígitos (ej. 20xxx Donostia, 48xxx Bilbao), muestra toda esa ciudad/provincia
+      if (cpLimpio.length >= 2) {
+        query = query.ilike('codigo_postal', `${cpLimpio.slice(0, 2)}%`)
+      }
+    } else if (cpLimpio.length >= 4) {
+      query = query.eq('codigo_postal', cpLimpio)
     }
 
     if (categoriaFiltro !== 'todas') {
@@ -110,14 +121,27 @@ export default function TablonEventosTab({
       return
     }
 
-    const autoresIds = Array.from(new Set(eventosData.map((e) => e.creado_por)))
-    const { data: perfiles } = await supabase
-      .from('perfiles')
-      .select('id, nombre, nombre_usuario')
-      .in('id', autoresIds)
+    const autoresNoOficiales = Array.from(
+      new Set(eventosData.filter((e) => !e.es_oficial).map((e) => e.creado_por))
+    )
+
+    let perfiles: { id: string; nombre: string | null; nombre_usuario: string | null }[] = []
+    if (autoresNoOficiales.length > 0) {
+      const { data: perfilesData } = await supabase
+        .from('perfiles')
+        .select('id, nombre, nombre_usuario')
+        .in('id', autoresNoOficiales)
+      perfiles = perfilesData || []
+    }
 
     const enriquecidos: EventoLiterario[] = eventosData.map((ev) => {
-      const perfil = perfiles?.find((p) => p.id === ev.creado_por)
+      if (ev.es_oficial) {
+        return {
+          ...ev,
+          autor_nombre: 'Admin',
+        }
+      }
+      const perfil = perfiles.find((p) => p.id === ev.creado_por)
       return {
         ...ev,
         autor_nombre:
@@ -155,6 +179,7 @@ export default function TablonEventosTab({
         fecha_evento: fechaIso,
         enlace_info: enlaceValido || null,
         creado_por: currentUserId,
+        es_oficial: false,
       })
 
       if (error) throw error
@@ -336,8 +361,13 @@ export default function TablonEventosTab({
             maxLength={5}
             value={cpFiltro}
             onChange={(e) => {
-              setCpFiltro(e.target.value.replace(/\D/g, ''))
-              setVerTodosCp(false)
+              const valor = e.target.value.replace(/\D/g, '')
+              setCpFiltro(valor)
+              if (valor.length >= 4) {
+                setVerTodosCp(false)
+              } else {
+                setVerTodosCp(true)
+              }
             }}
             placeholder="CP..."
             className="w-24 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
@@ -395,7 +425,7 @@ export default function TablonEventosTab({
         <div className="space-y-2.5">
           {eventos.map((ev) => {
             const catMeta = CATEGORIAS[ev.categoria] || CATEGORIAS.coloquio
-            const esMio = ev.creado_por === currentUserId
+            const esMio = !ev.es_oficial && ev.creado_por === currentUserId
 
             return (
               <div
@@ -452,7 +482,14 @@ export default function TablonEventosTab({
                   </span>
 
                   <div className="flex items-center gap-3">
-                    <span>Publicado por {esMio ? 'ti' : ev.autor_nombre}</span>
+                    {ev.es_oficial ? (
+                      <span className="inline-flex items-center gap-1 font-semibold text-emerald-800">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Publicado por Admin</span>
+                      </span>
+                    ) : (
+                      <span>Publicado por {esMio ? 'ti' : ev.autor_nombre}</span>
+                    )}
                     {ev.enlace_info && (
                       <a
                         href={ev.enlace_info}
