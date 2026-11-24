@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { createClient } from '@/utils/supabase/client'
-import { normalizarGenero } from '@/utils/generos'
+import { GENEROS_EXLIBRIS, normalizarGenero } from '@/utils/generos'
 import {
   Camera,
   Check,
@@ -28,6 +28,12 @@ interface BorradorManual {
   portadaUrl: string
   genero: string
   sinopsis: string | null
+}
+
+function limpiarHtml(texto?: string | null): string | null {
+  if (!texto) return null
+  const limpio = texto.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  return limpio || null
 }
 
 export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScannerProps) {
@@ -81,7 +87,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           autor: datos.autor.trim(),
           portada_url: datos.portadaUrl,
           genero: datos.genero || 'Otros',
-          sinopsis: datos.sinopsis,
+          sinopsis: datos.sinopsis?.trim() || null,
         })
 
         if (catError) throw catError
@@ -149,40 +155,88 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         let portadaUrl = existente?.portada_url || ''
         let genero = existente?.genero || 'Otros'
         let sinopsis: string | null = existente?.sinopsis || null
+        let categoriasCrudas: string[] = []
 
         const necesitaMetadatos =
           !existente ||
           titulo.startsWith('Libro ISBN ') ||
-          autor === 'Autor desconocido'
+          autor === 'Autor desconocido' ||
+          genero === 'Otros' ||
+          !sinopsis
 
         if (necesitaMetadatos) {
           if (titulo.startsWith('Libro ISBN ')) titulo = ''
           if (autor === 'Autor desconocido') autor = ''
 
-          // 1. Intentar Google Books
+          // 1. Google Books por ISBN exacto
           try {
             const resGoogle = await fetch(
               `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
             )
             if (resGoogle.ok) {
               const dataGoogle = await resGoogle.json()
-              const info = dataGoogle.items?.[0]?.volumeInfo
+              const items = Array.isArray(dataGoogle.items) ? dataGoogle.items : []
 
-              if (info) {
-                titulo = info.title || titulo
-                autor = Array.isArray(info.authors) ? info.authors.join(', ') : autor
-                portadaUrl =
-                  info.imageLinks?.thumbnail?.replace('http://', 'https://') || portadaUrl
-                genero = normalizarGenero(info.categories)
-                sinopsis = info.description || sinopsis
+              for (const item of items) {
+                const info = item?.volumeInfo
+                if (!info) continue
+                if (!titulo && info.title) titulo = info.title
+                if (!autor && Array.isArray(info.authors)) {
+                  autor = info.authors.join(', ')
+                }
+                if (!portadaUrl && info.imageLinks?.thumbnail) {
+                  portadaUrl = info.imageLinks.thumbnail.replace('http://', 'https://')
+                }
+                if (Array.isArray(info.categories)) {
+                  categoriasCrudas.push(...info.categories)
+                }
+                const descLimpia = limpiarHtml(info.description)
+                if (descLimpia && (!sinopsis || descLimpia.length > sinopsis.length)) {
+                  sinopsis = descLimpia
+                }
               }
             }
           } catch {
-            // Continuar al fallback de Open Library
+            // Continuar
           }
 
-          // 2. Fallback Open Library
-          if (!titulo || !autor) {
+          // 2. Rescate en Google Books por título + autor (para coger sinopsis/categorías de otras ediciones)
+          if (titulo && (!sinopsis || categoriasCrudas.length === 0)) {
+            try {
+              const primerAutor = autor.split(',')[0]?.trim()
+              const queryBusqueda = primerAutor
+                ? `intitle:${encodeURIComponent(titulo)}+inauthor:${encodeURIComponent(primerAutor)}`
+                : `intitle:${encodeURIComponent(titulo)}`
+
+              const resAlt = await fetch(
+                `https://www.googleapis.com/books/v1/volumes?q=${queryBusqueda}&langRestrict=es&maxResults=5`
+              )
+              if (resAlt.ok) {
+                const dataAlt = await resAlt.json()
+                const itemsAlt = Array.isArray(dataAlt.items) ? dataAlt.items : []
+
+                for (const item of itemsAlt) {
+                  const info = item?.volumeInfo
+                  if (!info) continue
+                  if (!portadaUrl && info.imageLinks?.thumbnail) {
+                    portadaUrl = info.imageLinks.thumbnail.replace('http://', 'https://')
+                  }
+                  if (Array.isArray(info.categories)) {
+                    categoriasCrudas.push(...info.categories)
+                  }
+                  const descLimpia = limpiarHtml(info.description)
+                  if (descLimpia && (!sinopsis || descLimpia.length > sinopsis.length)) {
+                    sinopsis = descLimpia
+                  }
+                }
+              }
+            } catch {
+              // Continuar
+            }
+          }
+
+          // 3. Fallback Open Library
+          if (!titulo || !autor || !sinopsis || categoriasCrudas.length === 0) {
             try {
               const resOL = await fetch(
                 `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`
@@ -206,17 +260,28 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                   if (!portadaUrl && libroOL.cover) {
                     portadaUrl = libroOL.cover.medium || libroOL.cover.large || ''
                   }
-                  if (genero === 'Otros' && Array.isArray(libroOL.subjects)) {
+                  if (!sinopsis) {
+                    const descOL =
+                      typeof libroOL.description === 'string'
+                        ? libroOL.description
+                        : libroOL.description?.value || libroOL.notes
+                    sinopsis = limpiarHtml(descOL)
+                  }
+                  if (Array.isArray(libroOL.subjects)) {
                     const temas = libroOL.subjects
                       .map((s: { name?: string }) => s.name)
                       .filter(Boolean)
-                    genero = normalizarGenero(temas)
+                    categoriasCrudas.push(...temas)
                   }
                 }
               }
             } catch {
               // Ignorar
             }
+          }
+
+          if (genero === 'Otros') {
+            genero = normalizarGenero(categoriasCrudas, sinopsis, titulo)
           }
         }
 
@@ -437,7 +502,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       onClick={handleCerrar}
     >
       <div
-        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-xl border border-stone-200"
+        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-xl border border-stone-200 max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-3.5 border-b border-stone-100 flex items-center justify-between">
@@ -491,7 +556,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
             <div className="py-14 flex flex-col items-center justify-center text-center gap-2">
               <Loader2 className="w-7 h-7 animate-spin text-emerald-700" />
               <p className="text-xs font-semibold text-stone-800">
-                Buscando ficha y portada del libro...
+                Buscando ficha, género y sinopsis del libro...
               </p>
             </div>
           ) : borradorManual ? (
@@ -538,6 +603,38 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                   }
                   placeholder="Ej. Juan José Millás, Juan Luis Arsuaga"
                   className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">Género</label>
+                <select
+                  value={borradorManual.genero}
+                  onChange={(e) =>
+                    setBorradorManual({ ...borradorManual, genero: e.target.value })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                >
+                  {GENEROS_EXLIBRIS.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  Sinopsis (opcional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={borradorManual.sinopsis || ''}
+                  onChange={(e) =>
+                    setBorradorManual({ ...borradorManual, sinopsis: e.target.value })
+                  }
+                  placeholder="Breve resumen del libro..."
+                  className="w-full px-3.5 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600 resize-none"
                 />
               </div>
 
