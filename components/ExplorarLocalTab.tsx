@@ -7,6 +7,7 @@ import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import MapaPuntosExlibris from '@/components/MapaPuntosExlibris'
+import TablonEventosTab from '@/components/TablonEventosTab'
 import {
   Award,
   BookOpen,
@@ -17,6 +18,7 @@ import {
   Tag,
   UserCircle2,
   X,
+  Megaphone,
 } from 'lucide-react'
 
 interface EjemplarLocal {
@@ -60,6 +62,7 @@ export default function ExplorarLocalTab({
   const [cargandoLibros, setCargandoLibros] = useState(false)
   const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
   const [mostrarMapa, setMostrarMapa] = useState(false)
+  const [mostrarTablon, setMostrarTablon] = useState(false)
 
   const buscarEnCodigoPostal = useCallback(
     async (cp: string) => {
@@ -289,14 +292,37 @@ const solicitarPrestamoLocal = async (ejemplar: EjemplarLocal) => {
         </div>
       ) : (
         <>
-        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setMostrarMapa((prev) => !prev)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
+              onClick={() => {
+                setMostrarMapa((prev) => !prev)
+                setMostrarTablon(false)
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-semibold cursor-pointer transition ${
+                mostrarMapa
+                  ? 'bg-emerald-700 text-white border-emerald-700'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+              }`}
             >
               <MapPin className="w-3.5 h-3.5" />
               <span>{mostrarMapa ? 'Ocultar mapa' : 'Puntos de intercambio'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMostrarTablon((prev) => !prev)
+                setMostrarMapa(false)
+              }}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-semibold cursor-pointer transition ${
+                mostrarTablon
+                  ? 'bg-amber-600 text-white border-amber-600'
+                  : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
+              }`}
+            >
+              <Megaphone className="w-3.5 h-3.5" />
+              <span>{mostrarTablon ? 'Ocultar tablón' : 'Tablón literario'}</span>
             </button>
           </div>
 
@@ -304,6 +330,13 @@ const solicitarPrestamoLocal = async (ejemplar: EjemplarLocal) => {
             <MapaPuntosExlibris
               codigoPostalInicial={cpActual}
               onClose={() => setMostrarMapa(false)}
+            />
+          )}
+
+          {mostrarTablon && (
+            <TablonEventosTab
+              codigoPostalUsuario={cpActual}
+              onClose={() => setMostrarTablon(false)}
             />
           )}
           {/* Filtro de texto y géneros cuando hay libros en el CP */}
