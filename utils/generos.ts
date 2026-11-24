@@ -25,7 +25,7 @@ export function normalizarGenero(
   if (/comic|graphic novel|manga|cómic|novela gr[aá]fica|historieta/.test(cats)) {
     return 'Cómic y Novela gráfica'
   }
-  if (/poetry|drama|poes[ií]a|teatro|poema [eé]pico/.test(cats)) {
+  if (/poetry|poes[ií]a|teatro|poema [eé]pico/.test(cats)) {
     return 'Poesía y Teatro'
   }
   if (/biography|autobiography|memoir|biograf[ií]a|memorias|diario personal/.test(cats)) {
