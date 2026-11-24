@@ -7,9 +7,12 @@ import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import PortadaLibro from '@/components/PortadaLibro'
 import {
   Award,
+  BookCheck,
   BookOpen,
   Camera,
   Check,
+  Clock,
+  HandHelping,
   Loader2,
   MapPin,
   MessageSquare,
@@ -25,6 +28,7 @@ import {
 export interface LibroDetalle {
   ejemplarId: string
   estado: string
+  propietarioId?: string
   propietarioNombre: string
   esPropio: boolean
   isbn: string
@@ -111,6 +115,10 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [miComentario, setMiComentario] = useState('')
   const [guardandoResena, setGuardandoResena] = useState(false)
 
+  // Estados para solicitud directa de préstamo
+  const [estadoPrestamoExistente, setEstadoPrestamoExistente] = useState<string | null>(null)
+  const [solicitandoPrestamo, setSolicitandoPrestamo] = useState(false)
+
   const onActualizadoRef = useRef(onActualizado)
   useEffect(() => {
     onActualizadoRef.current = onActualizado
@@ -178,6 +186,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setPortadaRota(false)
     setMiPuntuacion(5)
     setMiComentario('')
+    setEstadoPrestamoExistente(null)
 
     const cargarDatosModal = async () => {
       const {
@@ -222,6 +231,19 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           }
 
           setClubesCompartidos(compartidos?.map((c) => c.club_id) || [])
+        } else {
+          // Comprobar si el usuario ya tiene un préstamo/solicitud activa de este ejemplar
+          const { data: prestamoActivo } = await supabase
+            .from('prestamos')
+            .select('estado')
+            .eq('ejemplar_id', libro.ejemplarId)
+            .eq('prestatario_id', user.id)
+            .in('estado', ['solicitado', 'aceptado', 'entregado'])
+            .maybeSingle()
+
+          if (prestamoActivo?.estado) {
+            setEstadoPrestamoExistente(prestamoActivo.estado)
+          }
         }
       }
 
@@ -361,6 +383,61 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   }, [currentUserId, resenas])
 
   if (!libro) return null
+
+  const solicitarPrestamoDesdeModal = async () => {
+    if (!currentUserId || solicitandoPrestamo || estadoPrestamoExistente) return
+    setSolicitandoPrestamo(true)
+
+    try {
+      let prestamistaId = libro.propietarioId
+
+      if (!prestamistaId) {
+        const { data: ejInfo, error: ejError } = await supabase
+          .from('ejemplares')
+          .select('propietario_id')
+          .eq('id', libro.ejemplarId)
+          .single()
+
+        if (ejError || !ejInfo?.propietario_id) {
+          throw new Error('No se pudo localizar al propietario del ejemplar.')
+        }
+        prestamistaId = ejInfo.propietario_id
+      }
+
+      if (prestamistaId === currentUserId) {
+        throw new Error('No puedes solicitar un libro de tu propia estantería.')
+      }
+
+      const { error: insertError } = await supabase.from('prestamos').insert({
+        ejemplar_id: libro.ejemplarId,
+        prestamista_id: prestamistaId,
+        prestatario_id: currentUserId,
+        club_id: libro.clubId || null,
+        estado: 'solicitado',
+      })
+
+      if (insertError) throw insertError
+
+      // Intentar enviar notificación push sin bloquear si falla
+      fetch('/api/notificaciones/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receptorId: prestamistaId,
+          titulo: 'Nueva solicitud de préstamo',
+          cuerpo: `Alguien quiere leer "${tituloActual}"`,
+        }),
+      }).catch(() => {})
+
+      setEstadoPrestamoExistente('solicitado')
+      onActualizadoRef.current()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al solicitar el préstamo'
+      alert(`No se pudo enviar la solicitud: ${msg}`)
+    } finally {
+      setSolicitandoPrestamo(false)
+    }
+  }
 
   const guardarTituloAutor = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -726,6 +803,60 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
               )}
             </div>
           </div>
+
+          {/* BOTÓN DIRECTO DE SOLICITAR PRÉSTAMO PARA LIBROS DE AMIGOS / VECINOS */}
+          {!libro.esPropio && (
+            <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs">
+                <p className="font-semibold text-stone-800">
+                  Ejemplar de <span className="text-emerald-800">{libro.propietarioNombre}</span>
+                </p>
+                <p className="text-[11px] text-stone-500 mt-0.5">
+                  {estadoPrestamoExistente === 'solicitado'
+                    ? 'Ya has enviado una solicitud. Revisa la pestaña Préstamos.'
+                    : estadoPrestamoExistente
+                    ? 'Actualmente tienes este préstamo activo.'
+                    : estado === 'disponible'
+                    ? 'Disponible para préstamo gratuito.'
+                    : 'Este ejemplar no está disponible en este momento.'}
+                </p>
+              </div>
+
+              {estadoPrestamoExistente ? (
+                <span className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-200 shrink-0">
+                  {estadoPrestamoExistente === 'solicitado' ? (
+                    <>
+                      <Clock className="w-4 h-4" />
+                      <span>Solicitud enviada</span>
+                    </>
+                  ) : (
+                    <>
+                      <BookCheck className="w-4 h-4" />
+                      <span>Préstamo activo</span>
+                    </>
+                  )}
+                </span>
+              ) : estado === 'disponible' ? (
+                <button
+                  type="button"
+                  onClick={solicitarPrestamoDesdeModal}
+                  disabled={solicitandoPrestamo}
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs cursor-pointer transition disabled:opacity-50 shrink-0"
+                >
+                  {solicitandoPrestamo ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <HandHelping className="w-4 h-4" />
+                  )}
+                  <span>{solicitandoPrestamo ? 'Enviando...' : 'Solicitar préstamo'}</span>
+                </button>
+              ) : (
+                <span className="inline-flex items-center justify-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-stone-200/80 text-stone-600 shrink-0">
+                  No disponible
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="bg-stone-50 rounded-2xl p-4 border border-stone-100 space-y-2">
             <div className="flex items-center justify-between">
