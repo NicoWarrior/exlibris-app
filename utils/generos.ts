@@ -1,4 +1,4 @@
-export const GENEROS_EXLIBRIS = [
+export const GENEROS_ESTANDAR = [
   'Novela',
   'Novela histórica',
   'Ciencia ficción y Distopía',
@@ -11,6 +11,8 @@ export const GENEROS_EXLIBRIS = [
   'Poesía y Teatro',
   'Otros',
 ] as const
+
+export const GENEROS_EXLIBRIS = GENEROS_ESTANDAR
 
 export function normalizarGenero(
   categoriasApi?: string[] | null,
