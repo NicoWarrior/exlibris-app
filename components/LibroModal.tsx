@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
 import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
+import PortadaLibro from '@/components/PortadaLibro'
 import {
   Award,
   BookOpen,
@@ -93,6 +94,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [guardandoSinopsis, setGuardandoSinopsis] = useState(false)
 
   const [premios, setPremios] = useState(libro?.premios || '')
+  const [portadaRota, setPortadaRota] = useState(false)
   const [portadaActual, setPortadaActual] = useState(libro?.portada_url || '')
   const [subiendoPortada, setSubiendoPortada] = useState(false)
   const [cargandoExtra, setCargandoExtra] = useState(false)
@@ -568,18 +570,12 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         <div className="p-5 space-y-5">
           <div className="flex gap-4">
             <div className="w-24 aspect-[2/3] bg-stone-100 rounded-xl overflow-hidden shrink-0 border border-stone-200 shadow-xs relative group">
-              {portadaActual ? (
-                <img
-                  src={portadaActual}
-                  alt={tituloActual}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center text-stone-400 text-[11px] p-2 text-center gap-1">
-                  <BookOpen className="w-5 h-5 text-stone-300" />
-                  <span>Sin portada</span>
-                </div>
-              )}
+              <PortadaLibro
+                src={portadaActual}
+                alt={tituloActual}
+                isbn={libro.isbn}
+                onImagenRota={() => setPortadaRota(true)}
+              />
 
               {puedeEditarPortada && (
                 <label

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
+import PortadaLibro from '@/components/PortadaLibro'
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -583,17 +584,12 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
               >
                 <div className="p-4 flex gap-3.5">
                   <div className="w-16 aspect-[2/3] bg-stone-100 rounded-lg overflow-hidden shrink-0 border border-stone-200">
-                    {item.portada_url ? (
-                      <img
-                        src={item.portada_url}
-                        alt={item.titulo}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-stone-400">
-                        <BookOpen className="w-5 h-5" />
-                      </div>
-                    )}
+                    <PortadaLibro
+                      src={item.portada_url}
+                      alt={item.titulo}
+                      isbn={item.isbn}
+                      compacto
+                    />
                   </div>
 
                   <div className="flex-1 min-w-0 space-y-1.5">

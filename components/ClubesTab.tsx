@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/client'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import { GENEROS_ESTANDAR } from '@/utils/generos'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
+import PortadaLibro from '@/components/PortadaLibro'
 import {
   Award,
   Check,
@@ -580,17 +581,11 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                     className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-xs flex flex-col cursor-pointer hover:border-emerald-500 transition"
                   >
                     <div className="aspect-[2/3] bg-stone-100 relative">
-                      {item.libros_catalogo?.portada_url ? (
-                        <img
-                          src={item.libros_catalogo.portada_url}
-                          alt={item.libros_catalogo.titulo}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-stone-400 text-xs p-4 text-center">
-                          Sin portada
-                        </div>
-                      )}
+                      <PortadaLibro
+                        src={item.libros_catalogo?.portada_url}
+                        alt={item.libros_catalogo?.titulo || 'Libro'}
+                        isbn={item.isbn}
+                      />
 
                       {item.libros_catalogo?.premios && (
                         <span
