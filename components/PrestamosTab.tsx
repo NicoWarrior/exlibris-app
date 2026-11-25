@@ -20,6 +20,7 @@ import {
   Send,
   X,
   MapPin,
+  BellRing,
 } from 'lucide-react'
 
 interface PrestamoItem {
@@ -63,6 +64,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [prestamos, setPrestamos] = useState<PrestamoItem[]>([])
   const [cargando, setCargando] = useState(true)
   const [procesandoId, setProcesandoId] = useState<string | null>(null)
+  const [avisosEnviados, setAvisosEnviados] = useState<Record<string, boolean>>({})
   const [filtroVista, setFiltroVista] = useState<'activos' | 'historial'>('activos')
 
   const [subiendoFotoKey, setSubiendoFotoKey] = useState<string | null>(null)
@@ -472,6 +474,44 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     }
   }
 
+  const avisarDevolucionAlDueno = async (item: PrestamoItem) => {
+    if (item.es_propietario || procesandoId || avisosEnviados[item.id]) return
+    setProcesandoId(item.id)
+
+    const textoAviso = `📚 Ya te he devuelto "${item.titulo}". Cuando puedas, entra en Préstamos y pulsa "Marcar como devuelto" para cerrarlo.`
+
+    const { data, error } = await supabase
+      .from('mensajes_prestamo')
+      .insert({
+        prestamo_id: item.id,
+        remitente_id: userId,
+        contenido: textoAviso,
+        leido: false,
+      })
+      .select()
+      .single()
+
+    setProcesandoId(null)
+
+    if (error) {
+      alert(`No se pudo enviar el recordatorio: ${error.message}`)
+      return
+    }
+
+    if (data && chatAbiertoId === item.id) {
+      setMensajes((prev) => (prev.some((m) => m.id === data.id) ? prev : [...prev, data]))
+    }
+
+    enviarNotificacionPush({
+      destinatarioId: item.propietario_id,
+      titulo: `Recordatorio de devolución · ${item.titulo}`,
+      cuerpo: `Te avisan de que ya te han devuelto "${item.titulo}". Confírmalo en Préstamos.`,
+      url: '/',
+    })
+
+    setAvisosEnviados((prev) => ({ ...prev, [item.id]: true }))
+  }
+
   const esActivo = (estado: string) =>
     estado === 'solicitado' || estado === 'activo' || estado === 'en_curso'
 
@@ -707,7 +747,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         </button>
                       )}
 
-                      {item.es_propietario &&
+                     {item.es_propietario &&
                         (item.estado === 'activo' || item.estado === 'en_curso') && (
                           <button
                             type="button"
@@ -719,6 +759,33 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                             <span>Marcar como devuelto</span>
                           </button>
                         )}
+
+                      {!item.es_propietario &&
+                        (item.estado === 'activo' || item.estado === 'en_curso') && (
+                          <button
+                            type="button"
+                            onClick={() => avisarDevolucionAlDueno(item)}
+                            disabled={estaProcesando || Boolean(avisosEnviados[item.id])}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                              avisosEnviados[item.id]
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200'
+                            }`}
+                          >
+                            {avisosEnviados[item.id] ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Aviso enviado</span>
+                              </>
+                            ) : (
+                              <>
+                                <BellRing className="w-3.5 h-3.5" />
+                                <span>Avisar devolución</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                    </div>
                     </div>
                   </div>
                 </div>
