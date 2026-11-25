@@ -9,6 +9,7 @@ import MapaPuntosExlibris, { PuntoExlibris } from '@/components/MapaPuntosExlibr
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  BellRing,
   BookOpen,
   Camera,
   Check,
@@ -20,7 +21,6 @@ import {
   Send,
   X,
   MapPin,
-  BellRing,
 } from 'lucide-react'
 
 interface PrestamoItem {
@@ -747,7 +747,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         </button>
                       )}
 
-                     {item.es_propietario &&
+                      {item.es_propietario &&
                         (item.estado === 'activo' || item.estado === 'en_curso') && (
                           <button
                             type="button"
@@ -785,7 +785,6 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                             )}
                           </button>
                         )}
-                    </div>
                     </div>
                   </div>
                 </div>
@@ -970,32 +969,34 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         })
                       )}
                     </div>
-                    <div className="flex justify-end mb-2">
-                    <button
-                      type="button"
-                      onClick={() => setMostrarSelectorPunto((prev) => !prev)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
-                    >
-                      <MapPin className="w-3.5 h-3.5" />
-                      <span>{mostrarSelectorPunto ? 'Cerrar mapa' : 'Proponer Punto Exlibris'}</span>
-                    </button>
-                  </div>
 
-                  {mostrarSelectorPunto && (
-                    <div className="mb-3">
-                      <MapaPuntosExlibris
-                        modoSelector
-                        onClose={() => setMostrarSelectorPunto(false)}
-                        onSeleccionarPunto={(punto: PuntoExlibris) => {
-                          const textoPunto = `📍 Propongo quedar en el Punto Exlibris: ${punto.nombre} (${punto.direccion}, CP ${punto.codigo_postal})${
-                            punto.horario_orientativo ? ` · Horario: ${punto.horario_orientativo}` : ''
-                          }`
-                          setNuevoMensaje(textoPunto)
-                          setMostrarSelectorPunto(false)
-                        }}
-                      />
+                    <div className="flex justify-end mb-2">
+                      <button
+                        type="button"
+                        onClick={() => setMostrarSelectorPunto((prev) => !prev)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        <span>{mostrarSelectorPunto ? 'Cerrar mapa' : 'Proponer Punto Exlibris'}</span>
+                      </button>
                     </div>
-                  )}
+
+                    {mostrarSelectorPunto && (
+                      <div className="mb-3">
+                        <MapaPuntosExlibris
+                          modoSelector
+                          onClose={() => setMostrarSelectorPunto(false)}
+                          onSeleccionarPunto={(punto: PuntoExlibris) => {
+                            const textoPunto = `📍 Propongo quedar en el Punto Exlibris: ${punto.nombre} (${punto.direccion}, CP ${punto.codigo_postal})${
+                              punto.horario_orientativo ? ` · Horario: ${punto.horario_orientativo}` : ''
+                            }`
+                            setNuevoMensaje(textoPunto)
+                            setMostrarSelectorPunto(false)
+                          }}
+                        />
+                      </div>
+                    )}
+
                     <form onSubmit={enviarMensaje} className="flex gap-2">
                       <input
                         type="text"
