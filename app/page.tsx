@@ -11,6 +11,7 @@ import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PerfilModal from '@/components/PerfilModal'
 import PortadaLibro from '@/components/PortadaLibro'
+import InstalarAppBanner from '@/components/InstalarAppBanner'
 import {
   ArrowLeftRight,
   Award,
@@ -488,6 +489,7 @@ export default function Home() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 pt-5">
+        <InstalarAppBanner />
         {tab === 'estanteria' && (
           <>
             {/* Cabecera con contador y botón escanear */}
