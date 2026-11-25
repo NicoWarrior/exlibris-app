@@ -65,6 +65,13 @@ export default function Home() {
   const [aliasUsuario, setAliasUsuario] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'estanteria' | 'clubes' | 'barrio' | 'prestamos'>('estanteria')
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('unirse')) {
+      setTab('clubes')
+    }
+  }, [])
   const [misLibros, setMisLibros] = useState<LibroEstanteria[]>([])
   const [notificacionesPrestamosCount, setNotificacionesPrestamosCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
