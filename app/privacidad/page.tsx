@@ -139,7 +139,7 @@ export default function PrivacidadPage() {
           <div className="space-y-1.5">
             <h3 className="font-bold text-stone-900 text-sm">2.4. Conservación y derechos del usuario</h3>
             <p>
-              Los datos se conservan mientras mantengas activa tu cuenta. Puedes ejercer tus derechos de <strong>acceso, rectificación, supresión, oposición, limitación y portabilidad</strong> escribiendo a{' '}
+              Los datos se conservan mientras mantengas activa tu cuenta. Puedes eliminar tu cuenta y todos tus datos asociados (perfil, ejemplares registrados, listas, membresías e historial) de forma inmediata y automática desde el apartado <strong>«Mi Perfil y Barrio»</strong> dentro de la aplicación. Asimismo, puedes ejercer tus derechos de <strong>acceso, rectificación, supresión, oposición, limitación y portabilidad</strong> escribiendo a{' '}
               <a
                 href="mailto:nicolas.guerrero.aguirre@gmail.com"
                 className="text-emerald-700 underline font-medium"
