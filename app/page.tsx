@@ -540,7 +540,7 @@ export default function Home() {
                 }`}
               >
                 <Bookmark className="w-3.5 h-3.5 text-amber-600" />
-                <span>Por leer ({listaDeseos.length})</span>
+                <span>¡Me lo apunto! ({listaDeseos.length})</span>
               </button>
             </div>
 
@@ -549,7 +549,7 @@ export default function Home() {
                 <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
                   <Bookmark className="w-10 h-10 text-stone-300 mx-auto mb-3" />
                   <h2 className="font-semibold text-stone-800 mb-1 text-sm">
-                    Tu lista Por leer está vacía
+                    Tu lista ¡Me lo apunto! está vacía
                   </h2>
                   <p className="text-xs text-stone-500 max-w-xs mx-auto">
                     Cuando veas un libro interesante en tus clubes, pulsa el icono de marcapáginas para guardarlo aquí y pedirlo cuando vayas a leerlo.
@@ -617,7 +617,7 @@ export default function Home() {
                           <button
                             type="button"
                             onClick={() => eliminarDeseo(deseo.id)}
-                            title="Quitar de Por leer"
+                            title="Quitar de ¡Me lo apunto!"
                             className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
                           >
                             <Trash2 className="w-4 h-4" />

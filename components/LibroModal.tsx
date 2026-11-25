@@ -452,7 +452,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         setEnListaDeseos(true)
         onActualizadoRef.current()
       } else {
-        alert(`No se pudo guardar en Por leer: ${error.message}`)
+        alert(`No se pudo guardar en ¡Me lo apunto!: ${error.message}`)
       }
     }
 
@@ -882,7 +882,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          {/* BOTONES DE SOLICITAR PRÉSTAMO Y GUARDAR EN POR LEER */}
+          {/* BOTONES DE SOLICITAR PRÉSTAMO Y GUARDAR EN ¡Me lo apunto! */}
           {!libro.esPropio && (
             <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 space-y-3">
               <div className="text-xs">
@@ -895,8 +895,8 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                     : estadoPrestamoExistente
                     ? 'Actualmente tienes este préstamo activo.'
                     : estado === 'disponible'
-                    ? 'Disponible para préstamo gratuito o para guardar en tu lista Por leer.'
-                    : 'Ahora mismo está prestado, pero puedes guardarlo en Por leer para pedirlo después.'}
+                    ? 'Disponible para préstamo gratuito o para guardar en tu lista ¡Me lo apunto!.'
+                    : 'Ahora mismo está prestado, pero puedes guardarlo en ¡Me lo apunto! para pedirlo después.'}
                 </p>
               </div>
 
@@ -948,12 +948,12 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                   {enListaDeseos ? (
                     <>
                       <BookmarkCheck className="w-4 h-4 text-amber-700" />
-                      <span>En Por leer</span>
+                      <span>En ¡Me lo apunto!</span>
                     </>
                   ) : (
                     <>
                       <Bookmark className="w-4 h-4 text-amber-600" />
-                      <span>Por leer</span>
+                      <span>¡Me lo apunto!</span>
                     </>
                   )}
                 </button>

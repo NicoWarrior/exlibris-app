@@ -360,7 +360,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       if (!error) {
         setDeseosIsbns((prev) => new Set(prev).add(ejemplar.isbn))
       } else {
-        alert(`No se pudo guardar en Por leer: ${error.message}`)
+        alert(`No se pudo guardar en ¡Me lo apunto!: ${error.message}`)
       }
     }
 
@@ -1065,8 +1065,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                             disabled={guardandoDeseoId === item.id}
                             title={
                               deseosIsbns.has(item.isbn)
-                                ? 'Quitar de mi lista Por leer'
-                                : 'Guardar en mi lista Por leer'
+                                ? 'Quitar de mi lista ¡Me lo apunto!'
+                                : 'Guardar en mi lista ¡Me lo apunto!'
                             }
                             className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
                               deseosIsbns.has(item.isbn)
@@ -1175,8 +1175,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                               disabled={guardandoDeseoId === item.id}
                               title={
                                 deseosIsbns.has(item.isbn)
-                                  ? 'Quitar de mi lista Por leer'
-                                  : 'Guardar en mi lista Por leer'
+                                  ? 'Quitar de mi lista ¡Me lo apunto!'
+                                  : 'Guardar en mi lista ¡Me lo apunto!'
                               }
                               className={`p-1.5 rounded-lg border transition cursor-pointer ${
                                 deseosIsbns.has(item.isbn)

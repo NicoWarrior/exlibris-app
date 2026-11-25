@@ -778,8 +778,8 @@ export default function ExplorarLocalTab({
                         disabled={guardandoDeseoId === item.id}
                         title={
                           deseosIsbns.has(item.isbn)
-                            ? 'Quitar de mi lista Por leer'
-                            : 'Guardar en mi lista Por leer'
+                            ? 'Quitar de mi lista ¡Me lo apunto!'
+                            : 'Guardar en mi lista ¡Me lo apunto!'
                         }
                         className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
                           deseosIsbns.has(item.isbn)
@@ -869,8 +869,8 @@ export default function ExplorarLocalTab({
                             disabled={guardandoDeseoId === item.id}
                             title={
                               deseosIsbns.has(item.isbn)
-                                ? 'Quitar de mi lista Por leer'
-                                : 'Guardar en mi lista Por leer'
+                                ? 'Quitar de mi lista ¡Me lo apunto!'
+                                : 'Guardar en mi lista ¡Me lo apunto!'
                             }
                             className={`p-1.5 rounded-lg border transition cursor-pointer ${
                               deseosIsbns.has(item.isbn)
