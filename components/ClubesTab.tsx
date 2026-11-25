@@ -22,6 +22,8 @@ import {
   Share2,
   Star,
   Tag,
+  Trash2,
+  UserMinus,
   Users,
   X,
 } from 'lucide-react'
@@ -31,6 +33,12 @@ interface Club {
   nombre: string
   codigo_invitacion: string
   creado_por: string
+}
+
+interface MiembroClub {
+  usuario_id: string
+  rol: string
+  nombre: string
 }
 
 interface EjemplarClub {
@@ -62,6 +70,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [clubes, setClubes] = useState<Club[]>([])
   const [clubActivo, setClubActivo] = useState<Club | null>(null)
   const [librosClub, setLibrosClub] = useState<EjemplarClub[]>([])
+  const [miembrosClub, setMiembrosClub] = useState<MiembroClub[]>([])
+  const [mostrarMiembros, setMostrarMiembros] = useState(false)
 
   const [vistaClub, setVistaClub] = useState<'grid' | 'lista'>('grid')
   const [busqueda, setBusqueda] = useState('')
@@ -133,6 +143,42 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     }
     setCargandoClubes(false)
   }, [supabase, userId])
+
+  const cargarMiembrosDelClub = useCallback(
+    async (clubId: string) => {
+      const { data: miembrosData } = await supabase
+        .from('miembros_club')
+        .select('usuario_id, rol')
+        .eq('club_id', clubId)
+
+      if (!miembrosData || miembrosData.length === 0) {
+        setMiembrosClub([])
+        return
+      }
+
+      const ids = miembrosData.map((m) => m.usuario_id)
+      const { data: perfilesData } = await supabase
+        .from('perfiles')
+        .select('id, nombre, nombre_usuario')
+        .in('id', ids)
+
+      const lista: MiembroClub[] = miembrosData.map((m) => {
+        const perfil = perfilesData?.find((p) => p.id === m.usuario_id)
+        const esYo = m.usuario_id === userId
+        return {
+          usuario_id: m.usuario_id,
+          rol: m.rol,
+          nombre: esYo
+            ? 'Tú'
+            : perfil?.nombre || perfil?.nombre_usuario || `Miembro #${m.usuario_id.slice(0, 4)}`,
+        }
+      })
+
+      lista.sort((a, b) => (a.usuario_id === userId ? -1 : b.usuario_id === userId ? 1 : a.nombre.localeCompare(b.nombre, 'es')))
+      setMiembrosClub(lista)
+    },
+    [supabase, userId]
+  )
 
   const cargarLibrosDelClub = useCallback(
     async (clubId: string) => {
@@ -242,9 +288,56 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   useEffect(() => {
     if (clubActivo) {
       cargarLibrosDelClub(clubActivo.id)
+      cargarMiembrosDelClub(clubActivo.id)
       setMenuCompartirAbierto(false)
+      setMostrarMiembros(false)
     }
-  }, [clubActivo, cargarLibrosDelClub])
+  }, [clubActivo, cargarLibrosDelClub, cargarMiembrosDelClub])
+
+  const handleExpulsarMiembro = async (
+    clubId: string,
+    miembroUserId: string,
+    nombreMiembro: string
+  ) => {
+    if (miembroUserId === userId) return
+    const confirmado = window.confirm(
+      `¿Expulsar a ${nombreMiembro} de este club? Sus libros dejarán de verse en el grupo.`
+    )
+    if (!confirmado) return
+
+    const { error } = await supabase
+      .from('miembros_club')
+      .delete()
+      .eq('club_id', clubId)
+      .eq('usuario_id', miembroUserId)
+
+    if (error) {
+      alert(`No se pudo eliminar al usuario: ${error.message}`)
+      return
+    }
+
+    await Promise.all([cargarMiembrosDelClub(clubId), cargarLibrosDelClub(clubId)])
+  }
+
+  const handleEliminarClub = async (clubId: string, nombreClub: string) => {
+    const confirmado = window.confirm(
+      `¿Eliminar definitivamente el club «${nombreClub}»? Esta acción expulsará a todos los miembros y no se puede deshacer.`
+    )
+    if (!confirmado) return
+
+    const { error } = await supabase
+      .from('clubes')
+      .delete()
+      .eq('id', clubId)
+      .eq('creado_por', userId)
+
+    if (error) {
+      alert(`No se pudo eliminar el club: ${error.message}`)
+      return
+    }
+
+    await cargarMisClubes()
+  }
 
   const crearClub = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -520,6 +613,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   }
 
   const datosCompartir = generarDatosInvitacion()
+  const esCreadorClubActivo = clubActivo?.creado_por === userId
 
   return (
     <div className="space-y-4">
@@ -720,6 +814,16 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               <div className="relative flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
+                  onClick={() => setMostrarMiembros((prev) => !prev)}
+                  className="px-2.5 py-1.5 bg-white border border-stone-200 rounded-xl text-[11px] font-medium text-stone-700 hover:bg-stone-50 flex items-center gap-1 cursor-pointer"
+                  title="Ver miembros del club"
+                >
+                  <Users className="w-3.5 h-3.5 text-stone-500" />
+                  <span>{miembrosClub.length}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={copiarCodigo}
                   className="px-2.5 py-1.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-[11px] font-medium text-emerald-900 hover:bg-emerald-100 flex items-center gap-1.5 cursor-pointer"
                   title="Copiar código de invitación"
@@ -826,6 +930,53 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               </div>
             )}
           </div>
+
+          {clubActivo && mostrarMiembros && (
+            <div className="bg-white border border-stone-200 rounded-2xl p-3.5 space-y-2.5 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-stone-800">
+                  Miembros de {clubActivo.nombre} ({miembrosClub.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMostrarMiembros(false)}
+                  className="text-stone-400 hover:text-stone-700 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="divide-y divide-stone-100">
+                {miembrosClub.map((m) => (
+                  <div
+                    key={m.usuario_id}
+                    className="py-2 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-stone-800 truncate">{m.nombre}</span>
+                      {m.usuario_id === clubActivo.creado_por && (
+                        <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded-md">
+                          Creador
+                        </span>
+                      )}
+                    </div>
+                    {esCreadorClubActivo && m.usuario_id !== userId && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExpulsarMiembro(clubActivo.id, m.usuario_id, m.nombre)
+                        }
+                        title="Expulsar del club"
+                        className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
+                      >
+                        <UserMinus className="w-3.5 h-3.5" />
+                        <span>Expulsar</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {librosClub.length > 0 && (
             <div className="space-y-3">
@@ -1202,6 +1353,19 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {clubActivo && esCreadorClubActivo && (
+            <div className="pt-4 mt-6 border-t border-stone-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => handleEliminarClub(clubActivo.id, clubActivo.nombre)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 border border-red-200 rounded-xl transition cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Eliminar club</span>
+              </button>
             </div>
           )}
         </>
