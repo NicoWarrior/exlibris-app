@@ -439,7 +439,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setGuardandoDeseo(false)
   }
 
-  const solicitarPrestamoDesdeModal = async () => {
+const solicitarPrestamoDesdeModal = async () => {
     if (!currentUserId || solicitandoPrestamo || estadoPrestamoExistente) return
     setSolicitandoPrestamo(true)
 
@@ -459,13 +459,15 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         propietarioId = ejInfo.propietario_id
       }
 
-      if (propietarioId === currentUserId) {
+      if (!propietarioId || propietarioId === currentUserId) {
         throw new Error('No puedes solicitar un libro de tu propia estantería.')
       }
 
+      const propietarioIdSeguro: string = propietarioId
+
       const { error: insertError } = await supabase.from('prestamos').insert({
         ejemplar_id: libro.ejemplarId,
-        propietario_id: propietarioId,
+        propietario_id: propietarioIdSeguro,
         lector_id: currentUserId,
         club_id: libro.clubId || null,
         estado: 'solicitado',
@@ -474,7 +476,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       if (insertError) throw insertError
 
       enviarNotificacionPush({
-        destinatarioId: propietarioId,
+        destinatarioId: propietarioIdSeguro,
         titulo: libro.clubNombre
           ? `Nueva solicitud en ${libro.clubNombre}`
           : 'Nueva solicitud de préstamo',
