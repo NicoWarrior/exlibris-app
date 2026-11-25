@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import { activarNotificacionesPush } from '@/utils/notificaciones'
@@ -10,18 +10,23 @@ import ExplorarLocalTab from '@/components/ExplorarLocalTab'
 import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PerfilModal from '@/components/PerfilModal'
+import PortadaLibro from '@/components/PortadaLibro'
 import {
   ArrowLeftRight,
   Award,
   Bell,
   BellRing,
   BookOpen,
+  LayoutGrid,
+  List,
   LogOut,
   MapPin,
   Plus,
   ScanBarcode,
+  Search,
   UserCircle2,
   Users,
+  X,
 } from 'lucide-react'
 
 interface LibroEstanteria {
@@ -51,6 +56,13 @@ export default function Home() {
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
   const [pushActivo, setPushActivo] = useState(false)
   const [activandoPush, setActivandoPush] = useState(false)
+
+  // Estados de visualización y filtrado de Mi Estantería
+  const [vistaEstanteria, setVistaEstanteria] = useState<'grid' | 'lista'>('grid')
+  const [busquedaEstanteria, setBusquedaEstanteria] = useState('')
+  const [estadoFiltro, setEstadoFiltro] = useState<'todos' | 'disponible' | 'prestado'>('todos')
+  const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
+
   const supabase = createClient()
 
   const sincronizarPerfilInicial = useCallback(
@@ -98,20 +110,26 @@ export default function Home() {
             .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
             .in('isbn', isbns)
 
-          const combinados = ejemplaresData.map((ej) => ({
-            id: ej.id,
-            estado: ej.estado,
-            visible_local: Boolean(ej.visible_local),
-            libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
-              isbn: ej.isbn,
-              titulo: `ISBN: ${ej.isbn}`,
-              autor: 'Sin datos en catálogo',
-              portada_url: '',
-              genero: 'Otros',
-              sinopsis: null,
-              premios: null,
-            },
-          }))
+          const combinados = ejemplaresData
+            .map((ej) => ({
+              id: ej.id,
+              estado: ej.estado,
+              visible_local: Boolean(ej.visible_local),
+              libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
+                isbn: ej.isbn,
+                titulo: `ISBN: ${ej.isbn}`,
+                autor: 'Sin datos en catálogo',
+                portada_url: '',
+                genero: 'Otros',
+                sinopsis: null,
+                premios: null,
+              },
+            }))
+            .sort((a, b) =>
+              a.libros_catalogo.titulo.localeCompare(b.libros_catalogo.titulo, 'es', {
+                sensitivity: 'base',
+              })
+            )
           setMisLibros(combinados)
         }
       }
@@ -193,6 +211,39 @@ export default function Home() {
     }
   }, [user?.id, supabase, cargarDatos])
 
+  const generosEstanteria = useMemo(() => {
+    const unicos = new Set<string>()
+    misLibros.forEach((item) => {
+      if (item.libros_catalogo?.genero) {
+        unicos.add(item.libros_catalogo.genero)
+      }
+    })
+    return ['Todos', ...Array.from(unicos).sort((a, b) => a.localeCompare(b, 'es'))]
+  }, [misLibros])
+
+  const librosFiltrados = useMemo(() => {
+    const q = busquedaEstanteria.trim().toLowerCase()
+    return misLibros.filter((item) => {
+      if (estadoFiltro === 'disponible' && item.estado !== 'disponible') return false
+      if (estadoFiltro === 'prestado' && item.estado !== 'prestado') return false
+      if (generoFiltro !== 'Todos' && (item.libros_catalogo?.genero || 'Otros') !== generoFiltro) {
+        return false
+      }
+      if (q) {
+        const titulo = item.libros_catalogo?.titulo?.toLowerCase() || ''
+        const autor = item.libros_catalogo?.autor?.toLowerCase() || ''
+        if (!titulo.includes(q) && !autor.includes(q)) return false
+      }
+      return true
+    })
+  }, [misLibros, busquedaEstanteria, estadoFiltro, generoFiltro])
+
+  const resumenContadores = useMemo(() => {
+    const disponibles = misLibros.filter((l) => l.estado === 'disponible').length
+    const prestados = misLibros.filter((l) => l.estado === 'prestado').length
+    return { disponibles, prestados }
+  }, [misLibros])
+
   const handleActivarNotificaciones = async () => {
     if (!user || activandoPush) return
     setActivandoPush(true)
@@ -217,6 +268,22 @@ export default function Home() {
     await supabase.auth.signOut()
     setUser(null)
     setMisLibros([])
+  }
+
+  const abrirDetalleLibro = (item: LibroEstanteria) => {
+    setLibroSeleccionado({
+      ejemplarId: item.id,
+      estado: item.estado,
+      propietarioNombre: aliasUsuario || 'Tú',
+      esPropio: true,
+      isbn: item.libros_catalogo.isbn,
+      titulo: item.libros_catalogo.titulo,
+      autor: item.libros_catalogo.autor,
+      portada_url: item.libros_catalogo.portada_url,
+      genero: item.libros_catalogo.genero,
+      sinopsis: item.libros_catalogo.sinopsis,
+      premios: item.libros_catalogo.premios,
+    })
   }
 
   if (loading) {
@@ -310,11 +377,20 @@ export default function Home() {
       <main className="max-w-3xl mx-auto px-4 pt-5">
         {tab === 'estanteria' && (
           <>
-            <div className="flex items-center justify-between mb-5">
+            {/* Cabecera con contador y botón escanear */}
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <h1 className="text-lg font-bold text-stone-900">Mi Estantería</h1>
                 <p className="text-xs text-stone-500">
                   {misLibros.length} {misLibros.length === 1 ? 'ejemplar' : 'ejemplares'}
+                  {misLibros.length > 0 && (
+                    <span>
+                      {' '}
+                      · {resumenContadores.disponibles} en casa
+                      {resumenContadores.prestados > 0 &&
+                        ` · ${resumenContadores.prestados} prestados`}
+                    </span>
+                  )}
                 </p>
               </div>
               <button
@@ -342,87 +418,253 @@ export default function Home() {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
-                {misLibros.map((item) => (
-                  <div
-                    key={item.id}
-                    onClick={() =>
-                      setLibroSeleccionado({
-                        ejemplarId: item.id,
-                        estado: item.estado,
-                        propietarioNombre: aliasUsuario || 'Tú',
-                        esPropio: true,
-                        isbn: item.libros_catalogo.isbn,
-                        titulo: item.libros_catalogo.titulo,
-                        autor: item.libros_catalogo.autor,
-                        portada_url: item.libros_catalogo.portada_url,
-                        genero: item.libros_catalogo.genero,
-                        sinopsis: item.libros_catalogo.sinopsis,
-                        premios: item.libros_catalogo.premios,
-                      })
-                    }
-                    className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-sm flex flex-col cursor-pointer hover:border-emerald-500 transition"
-                  >
-                    <div className="aspect-[2/3] bg-stone-100 relative">
-                      {item.libros_catalogo?.portada_url ? (
-                        <img
-                          src={item.libros_catalogo.portada_url}
-                          alt={item.libros_catalogo.titulo}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-stone-400 text-xs p-4 text-center">
-                          Sin portada
-                        </div>
-                      )}
+              <div className="space-y-3.5">
+                {/* Barra de búsqueda + selector de vista */}
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={busquedaEstanteria}
+                      onChange={(e) => setBusquedaEstanteria(e.target.value)}
+                      placeholder="Buscar en mi biblioteca por título o autor..."
+                      className="w-full pl-9 pr-8 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+                    />
+                    {busquedaEstanteria && (
+                      <button
+                        type="button"
+                        onClick={() => setBusquedaEstanteria('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
 
-                      <div className="absolute top-2 left-2 flex flex-col gap-1">
-                        {item.libros_catalogo?.premios && (
-                          <span
-                            title={item.libros_catalogo.premios}
-                            className="bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-sm"
-                          >
-                            <Award className="w-3 h-3" />
-                          </span>
-                        )}
-                        {item.visible_local && (
-                          <span
-                            title="Visible de forma anónima en tu código postal"
-                            className="bg-sky-600/95 text-white p-1 rounded-full shadow-sm"
-                          >
-                            <MapPin className="w-3 h-3" />
-                          </span>
-                        )}
-                      </div>
+                  <div className="flex items-center bg-white border border-stone-200 rounded-xl p-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setVistaEstanteria('grid')}
+                      className={`p-1.5 rounded-lg transition cursor-pointer ${
+                        vistaEstanteria === 'grid'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-stone-500 hover:text-stone-800'
+                      }`}
+                      title="Vista estantería (portadas)"
+                    >
+                      <LayoutGrid className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVistaEstanteria('lista')}
+                      className={`p-1.5 rounded-lg transition cursor-pointer ${
+                        vistaEstanteria === 'lista'
+                          ? 'bg-emerald-700 text-white'
+                          : 'text-stone-500 hover:text-stone-800'
+                      }`}
+                      title="Vista lista detallada"
+                    >
+                      <List className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
 
-                      <span
-                        className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-sm ${
-                          item.estado === 'disponible'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : item.estado === 'prestado'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-800'
+                {/* Filtros de estado + píldoras de género */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                    {(
+                      [
+                        { id: 'todos', label: `Todos (${misLibros.length})` },
+                        { id: 'disponible', label: `En casa (${resumenContadores.disponibles})` },
+                        { id: 'prestado', label: `Prestados (${resumenContadores.prestados})` },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => setEstadoFiltro(f.id)}
+                        className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition cursor-pointer ${
+                          estadoFiltro === f.id
+                            ? 'bg-stone-900 text-white'
+                            : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-100'
                         }`}
                       >
-                        {item.estado === 'disponible'
-                          ? 'Disponible'
-                          : item.estado === 'prestado'
-                          ? 'Prestado'
-                          : 'No disponible'}
-                      </span>
-                    </div>
-                    <div className="p-3 flex-1 flex flex-col justify-between">
-                      <div>
-                        <h3 className="font-semibold text-stone-900 text-xs line-clamp-2">
-                          {item.libros_catalogo?.titulo}
-                        </h3>
-                        <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">
-                          {item.libros_catalogo?.autor}
-                        </p>
-                      </div>
-                    </div>
+                        {f.label}
+                      </button>
+                    ))}
                   </div>
-                ))}
+
+                  {generosEstanteria.length > 2 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                      {generosEstanteria.map((gen) => (
+                        <button
+                          key={gen}
+                          type="button"
+                          onClick={() => setGeneroFiltro(gen)}
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition cursor-pointer ${
+                            generoFiltro === gen
+                              ? 'bg-emerald-700 text-white shadow-2xs'
+                              : 'bg-stone-200/70 text-stone-700 hover:bg-stone-200'
+                          }`}
+                        >
+                          {gen}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Resultados vacíos al filtrar */}
+                {librosFiltrados.length === 0 ? (
+                  <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center">
+                    <p className="text-xs font-semibold text-stone-700">
+                      No hay libros que coincidan con los filtros actuales
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBusquedaEstanteria('')
+                        setEstadoFiltro('todos')
+                        setGeneroFiltro('Todos')
+                      }}
+                      className="mt-3 px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-xs font-medium cursor-pointer"
+                    >
+                      Limpiar filtros
+                    </button>
+                  </div>
+                ) : vistaEstanteria === 'grid' ? (
+                  /* VISTA CUADRÍCULA COMPACTA (ESTANTERÍA VISUAL) */
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 sm:gap-3">
+                    {librosFiltrados.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => abrirDetalleLibro(item)}
+                        className="group bg-white rounded-xl border border-stone-200/90 overflow-hidden shadow-2xs flex flex-col cursor-pointer hover:border-emerald-500 hover:shadow-sm transition"
+                      >
+                        <div className="aspect-[2/3] bg-stone-100 relative overflow-hidden">
+                          <PortadaLibro
+                            src={item.libros_catalogo?.portada_url}
+                            alt={item.libros_catalogo?.titulo || 'Libro'}
+                            isbn={item.libros_catalogo?.isbn}
+                          />
+
+                          {/* Badges superiores compactos */}
+                          <div className="absolute top-1.5 left-1.5 flex flex-col gap-1">
+                            {item.libros_catalogo?.premios && (
+                              <span
+                                title={item.libros_catalogo.premios}
+                                className="bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-xs"
+                              >
+                                <Award className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                            {item.visible_local && (
+                              <span
+                                title="Visible de forma anónima en tu código postal"
+                                className="bg-sky-600/95 text-white p-1 rounded-full shadow-xs"
+                              >
+                                <MapPin className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Indicador de estado compacto */}
+                          {item.estado === 'disponible' ? (
+                            <span
+                              title="Disponible en casa"
+                              className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white shadow-xs"
+                            />
+                          ) : (
+                            <span
+                              className={`absolute bottom-1.5 inset-x-1.5 text-center text-[9px] font-bold py-0.5 px-1.5 rounded-md shadow-xs truncate ${
+                                item.estado === 'prestado'
+                                  ? 'bg-blue-600/95 text-white'
+                                  : 'bg-amber-500/95 text-white'
+                              }`}
+                            >
+                              {item.estado === 'prestado' ? 'Prestado' : 'No disp.'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="p-2 flex-1 flex flex-col justify-between">
+                          <h3 className="font-semibold text-stone-900 text-[11px] leading-snug line-clamp-2 group-hover:text-emerald-800 transition">
+                            {item.libros_catalogo?.titulo}
+                          </h3>
+                          <p className="text-[10px] text-stone-500 mt-0.5 truncate">
+                            {item.libros_catalogo?.autor}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  /* VISTA LISTA COMPACTA */
+                  <div className="space-y-2">
+                    {librosFiltrados.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => abrirDetalleLibro(item)}
+                        className="bg-white rounded-xl border border-stone-200 p-2.5 flex items-center gap-3 cursor-pointer hover:border-emerald-500 transition"
+                      >
+                        <div className="w-11 h-16 rounded-lg overflow-hidden bg-stone-100 shrink-0 relative">
+                          <PortadaLibro
+                            src={item.libros_catalogo?.portada_url}
+                            alt={item.libros_catalogo?.titulo || 'Libro'}
+                            isbn={item.libros_catalogo?.isbn}
+                          />
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3 className="font-semibold text-stone-900 text-xs line-clamp-1">
+                              {item.libros_catalogo?.titulo}
+                            </h3>
+                            <span
+                              className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                item.estado === 'disponible'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : item.estado === 'prestado'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {item.estado === 'disponible'
+                                ? 'Disponible'
+                                : item.estado === 'prestado'
+                                ? 'Prestado'
+                                : 'No disponible'}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                            {item.libros_catalogo?.autor}
+                          </p>
+
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            {item.libros_catalogo?.genero && (
+                              <span className="text-[10px] font-medium bg-stone-100 text-stone-600 px-2 py-0.5 rounded-md">
+                                {item.libros_catalogo.genero}
+                              </span>
+                            )}
+                            {item.visible_local && (
+                              <span className="text-[10px] font-medium bg-sky-50 text-sky-700 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                <MapPin className="w-2.5 h-2.5" />
+                                Barrio
+                              </span>
+                            )}
+                            {item.libros_catalogo?.premios && (
+                              <span className="text-[10px] font-medium bg-amber-50 text-amber-800 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                <Award className="w-2.5 h-2.5" />
+                                Premiado
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>

@@ -1,9 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
-import { GENEROS_ESTANDAR } from '@/utils/generos'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
 import {
@@ -11,6 +10,8 @@ import {
   Check,
   Copy,
   KeyRound,
+  LayoutGrid,
+  List,
   MessageSquare,
   Plus,
   Search,
@@ -58,7 +59,9 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [clubActivo, setClubActivo] = useState<Club | null>(null)
   const [librosClub, setLibrosClub] = useState<EjemplarClub[]>([])
 
+  const [vistaClub, setVistaClub] = useState<'grid' | 'lista'>('grid')
   const [busqueda, setBusqueda] = useState('')
+  const [filtroAlcance, setFiltroAlcance] = useState<'todos' | 'ajenos' | 'disponibles'>('todos')
   const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
 
@@ -106,6 +109,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     async (clubId: string) => {
       setCargandoLibros(true)
       setGeneroFiltro('Todos')
+      setFiltroAlcance('todos')
       setBusqueda('')
 
       const { data: compartidos } = await supabase
@@ -131,7 +135,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         setCargandoLibros(false)
         return
       }
-      
 
       const ownerIds = Array.from(new Set(ejemplaresData.map((e) => e.propietario_id)))
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
@@ -184,20 +187,17 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       })
 
       combinados.sort((a, b) => {
-        // 1. Amigos y familiares primero; los tuyos al final
         const esMioA = a.propietario_id === userId ? 1 : 0
         const esMioB = b.propietario_id === userId ? 1 : 0
         if (esMioA !== esMioB) return esMioA - esMioB
 
-        // 2. Disponibles arriba dentro de cada grupo
         const dispA = a.estado === 'disponible' ? 0 : 1
         const dispB = b.estado === 'disponible' ? 0 : 1
         if (dispA !== dispB) return dispA - dispB
 
-        // 3. Orden alfabético por título
         const tituloA = a.libros_catalogo?.titulo || ''
         const tituloB = b.libros_catalogo?.titulo || ''
-        return tituloA.localeCompare(tituloB, 'es')
+        return tituloA.localeCompare(tituloB, 'es', { sensitivity: 'base' })
       })
 
       setLibrosClub(combinados)
@@ -334,31 +334,66 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setTimeout(() => setCopiado(false), 2000)
   }
 
-  const termino = busqueda.trim().toLowerCase()
-  const librosPorTexto = termino
-    ? librosClub.filter(
-        (l) =>
+  const abrirDetalleClub = (item: EjemplarClub) => {
+    const esMio = item.propietario_id === userId
+    setLibroSeleccionado({
+      ejemplarId: item.id,
+      estado: item.estado,
+      propietarioNombre: item.propietario_nombre,
+      esPropio: esMio,
+      isbn: item.libros_catalogo.isbn,
+      titulo: item.libros_catalogo.titulo,
+      autor: item.libros_catalogo.autor,
+      portada_url: item.libros_catalogo.portada_url,
+      genero: item.libros_catalogo.genero,
+      sinopsis: item.libros_catalogo.sinopsis,
+      premios: item.libros_catalogo.premios,
+      clubId: clubActivo?.id || null,
+      clubNombre: clubActivo?.nombre || null,
+    })
+  }
+
+  const librosBaseFiltrados = useMemo(() => {
+    const termino = busqueda.trim().toLowerCase()
+    return librosClub.filter((l) => {
+      if (filtroAlcance === 'ajenos' && l.propietario_id === userId) return false
+      if (filtroAlcance === 'disponibles' && l.estado !== 'disponible') return false
+      if (termino) {
+        const coincide =
           l.libros_catalogo?.titulo?.toLowerCase().includes(termino) ||
           l.libros_catalogo?.autor?.toLowerCase().includes(termino) ||
           l.propietario_nombre.toLowerCase().includes(termino)
-      )
-    : librosClub
+        if (!coincide) return false
+      }
+      return true
+    })
+  }, [librosClub, busqueda, filtroAlcance, userId])
 
-  const conteoPorGenero = librosPorTexto.reduce<Record<string, number>>((acc, item) => {
-    const g = item.libros_catalogo?.genero || 'Otros'
-    acc[g] = (acc[g] || 0) + 1
-    return acc
-  }, {})
+  const conteoPorGenero = useMemo(() => {
+    return librosBaseFiltrados.reduce<Record<string, number>>((acc, item) => {
+      const g = item.libros_catalogo?.genero || 'Otros'
+      acc[g] = (acc[g] || 0) + 1
+      return acc
+    }, {})
+  }, [librosBaseFiltrados])
 
-  const generosDisponibles = [
-    'Todos',
-    ...GENEROS_ESTANDAR.filter((g) => g !== 'Otros' || (conteoPorGenero['Otros'] || 0) > 0),
-  ]
+  const generosDisponibles = useMemo(() => {
+    const presentes = Object.keys(conteoPorGenero).sort((a, b) => a.localeCompare(b, 'es'))
+    return ['Todos', ...presentes]
+  }, [conteoPorGenero])
 
-  const librosFiltrados =
-    generoFiltro === 'Todos'
-      ? librosPorTexto
-      : librosPorTexto.filter((l) => (l.libros_catalogo?.genero || 'Otros') === generoFiltro)
+  const librosFiltrados = useMemo(() => {
+    if (generoFiltro === 'Todos') return librosBaseFiltrados
+    return librosBaseFiltrados.filter(
+      (l) => (l.libros_catalogo?.genero || 'Otros') === generoFiltro
+    )
+  }, [librosBaseFiltrados, generoFiltro])
+
+  const contadoresAlcance = useMemo(() => {
+    const ajenos = librosClub.filter((l) => l.propietario_id !== userId).length
+    const disponibles = librosClub.filter((l) => l.estado === 'disponible').length
+    return { ajenos, disponibles }
+  }, [librosClub, userId])
 
   if (cargandoClubes) {
     return (
@@ -369,12 +404,13 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {/* Cabecera */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Mis Clubes</h1>
           <p className="text-xs text-stone-500">
-            Comparte estantería, reseña lecturas y pide libros en tus grupos
+            {librosClub.length} {librosClub.length === 1 ? 'libro compartido' : 'libros compartidos'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -397,6 +433,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       </div>
 
+      {/* Formularios Crear / Unirse */}
       {modoFormulario === 'crear' && (
         <form
           onSubmit={crearClub}
@@ -465,101 +502,165 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       ) : (
         <>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {clubes.map((club) => (
-              <button
-                key={club.id}
-                type="button"
-                onClick={() => setClubActivo(club)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
-                  clubActivo?.id === club.id
-                    ? 'bg-stone-900 text-white'
-                    : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-100'
-                }`}
-              >
-                {club.nombre}
-              </button>
-            ))}
-          </div>
+          {/* Selector de club + Código compacto */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+              {clubes.map((club) => (
+                <button
+                  key={club.id}
+                  type="button"
+                  onClick={() => setClubActivo(club)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                    clubActivo?.id === club.id
+                      ? 'bg-stone-900 text-white'
+                      : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-100'
+                  }`}
+                >
+                  {club.nombre}
+                </button>
+              ))}
+            </div>
 
-          {clubActivo && (
-            <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl px-4 py-3 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-medium text-emerald-900">
-                  Código para invitar amigos a <strong>{clubActivo.nombre}</strong>:
-                </p>
-                <p className="text-sm font-mono font-bold text-emerald-800 tracking-wider mt-0.5">
-                  {clubActivo.codigo_invitacion}
-                </p>
-              </div>
+            {clubActivo && (
               <button
                 type="button"
                 onClick={copiarCodigo}
-                className="px-3 py-1.5 bg-white border border-emerald-200 rounded-lg text-xs font-semibold text-emerald-800 hover:bg-emerald-100 flex items-center gap-1.5 cursor-pointer"
+                className="px-2.5 py-1.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-[11px] font-medium text-emerald-900 hover:bg-emerald-100 flex items-center gap-1.5 cursor-pointer shrink-0"
+                title="Copiar código de invitación del club"
               >
-                {copiado ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiado ? 'Copiado' : 'Copiar'}</span>
+                <span className="text-emerald-700">Código:</span>
+                <strong className="font-mono tracking-wider">
+                  {clubActivo.codigo_invitacion}
+                </strong>
+                {copiado ? (
+                  <Check className="w-3 h-3 text-emerald-700" />
+                ) : (
+                  <Copy className="w-3 h-3 text-emerald-700" />
+                )}
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
+          {/* Buscador + Vista Cuadrícula/Lista + Filtros */}
           {librosClub.length > 0 && (
             <div className="space-y-3">
-              <div className="relative">
-                <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder="Buscar por título, autor o amigo..."
-                  className="w-full pl-9 pr-8 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
-                />
-                {busqueda && (
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={busqueda}
+                    onChange={(e) => setBusqueda(e.target.value)}
+                    placeholder="Buscar por título, autor o miembro..."
+                    className="w-full pl-9 pr-8 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+                  />
+                  {busqueda && (
+                    <button
+                      type="button"
+                      onClick={() => setBusqueda('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center bg-white border border-stone-200 rounded-xl p-0.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => setBusqueda('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-700 cursor-pointer"
+                    onClick={() => setVistaClub('grid')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      vistaClub === 'grid'
+                        ? 'bg-emerald-700 text-white'
+                        : 'text-stone-500 hover:text-stone-800'
+                    }`}
+                    title="Vista cuadrícula de portadas"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <LayoutGrid className="w-4 h-4" />
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setVistaClub('lista')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      vistaClub === 'lista'
+                        ? 'bg-emerald-700 text-white'
+                        : 'text-stone-500 hover:text-stone-800'
+                    }`}
+                    title="Vista lista detallada"
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
-              <div className="flex gap-1.5 overflow-x-auto pb-1.5">
-                {generosDisponibles.map((gen) => {
-                  const cantidad =
-                    gen === 'Todos' ? librosPorTexto.length : conteoPorGenero[gen] || 0
-                  return (
+              {/* Filtros rápidos de alcance/disponibilidad */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                  {(
+                    [
+                      { id: 'todos', label: `Todos (${librosClub.length})` },
+                      { id: 'ajenos', label: `De amigos (${contadoresAlcance.ajenos})` },
+                      {
+                        id: 'disponibles',
+                        label: `Disponibles (${contadoresAlcance.disponibles})`,
+                      },
+                    ] as const
+                  ).map((f) => (
                     <button
-                      key={gen}
+                      key={f.id}
                       type="button"
-                      onClick={() => setGeneroFiltro(gen)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition flex items-center gap-1.5 cursor-pointer ${
-                        generoFiltro === gen
-                          ? 'bg-emerald-700 text-white shadow-xs'
+                      onClick={() => setFiltroAlcance(f.id)}
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition cursor-pointer ${
+                        filtroAlcance === f.id
+                          ? 'bg-stone-900 text-white'
                           : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-100'
                       }`}
                     >
-                      {gen !== 'Todos' && <Tag className="w-3 h-3 opacity-75" />}
-                      <span>{gen}</span>
-                      {cantidad > 0 && (
-                        <span
-                          className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Píldoras de género con libros presentes */}
+                {generosDisponibles.length > 2 && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {generosDisponibles.map((gen) => {
+                      const cantidad =
+                        gen === 'Todos'
+                          ? librosBaseFiltrados.length
+                          : conteoPorGenero[gen] || 0
+                      return (
+                        <button
+                          key={gen}
+                          type="button"
+                          onClick={() => setGeneroFiltro(gen)}
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition flex items-center gap-1 cursor-pointer ${
                             generoFiltro === gen
-                              ? 'bg-emerald-800 text-emerald-100'
-                              : 'bg-stone-100 text-stone-500'
+                              ? 'bg-emerald-700 text-white shadow-2xs'
+                              : 'bg-stone-200/70 text-stone-700 hover:bg-stone-200'
                           }`}
                         >
-                          {cantidad}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
+                          {gen !== 'Todos' && <Tag className="w-2.5 h-2.5 opacity-75" />}
+                          <span>{gen}</span>
+                          <span
+                            className={`text-[10px] px-1 rounded-full ${
+                              generoFiltro === gen
+                                ? 'bg-emerald-800 text-emerald-100'
+                                : 'text-stone-500'
+                            }`}
+                          >
+                            {cantidad}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
+          {/* Listado / Cuadrícula de libros del club */}
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
               Cargando biblioteca del club...
@@ -569,36 +670,34 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               Aún no hay libros compartidos en este club. Abre cualquier libro de tu Estantería para activarlo aquí.
             </div>
           ) : librosFiltrados.length === 0 ? (
-            <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center text-xs text-stone-500">
-              No hay libros que coincidan con este filtro dentro del club.
+            <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center">
+              <p className="text-xs font-semibold text-stone-700">
+                No hay libros que coincidan con este filtro dentro del club
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setBusqueda('')
+                  setFiltroAlcance('todos')
+                  setGeneroFiltro('Todos')
+                }}
+                className="mt-3 px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-xs font-medium cursor-pointer"
+              >
+                Limpiar filtros
+              </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
+          ) : vistaClub === 'grid' ? (
+            /* VISTA CUADRÍCULA COMPACTA */
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 sm:gap-3">
               {librosFiltrados.map((item) => {
                 const esMio = item.propietario_id === userId
                 return (
                   <div
                     key={item.id}
-                    onClick={() =>
-                      setLibroSeleccionado({
-                        ejemplarId: item.id,
-                        estado: item.estado,
-                        propietarioNombre: item.propietario_nombre,
-                        esPropio: esMio,
-                        isbn: item.libros_catalogo.isbn,
-                        titulo: item.libros_catalogo.titulo,
-                        autor: item.libros_catalogo.autor,
-                        portada_url: item.libros_catalogo.portada_url,
-                        genero: item.libros_catalogo.genero,
-                        sinopsis: item.libros_catalogo.sinopsis,
-                        premios: item.libros_catalogo.premios,
-                        clubId: clubActivo?.id || null,
-                        clubNombre: clubActivo?.nombre || null,
-                      })
-                    }
-                    className="bg-white rounded-xl border border-stone-200 overflow-hidden shadow-xs flex flex-col cursor-pointer hover:border-emerald-500 transition"
+                    onClick={() => abrirDetalleClub(item)}
+                    className="group bg-white rounded-xl border border-stone-200/90 overflow-hidden shadow-2xs flex flex-col cursor-pointer hover:border-emerald-500 hover:shadow-sm transition"
                   >
-                    <div className="aspect-[2/3] bg-stone-100 relative">
+                    <div className="aspect-[2/3] bg-stone-100 relative overflow-hidden">
                       <PortadaLibro
                         src={item.libros_catalogo?.portada_url}
                         alt={item.libros_catalogo?.titulo || 'Libro'}
@@ -608,54 +707,51 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                       {item.libros_catalogo?.premios && (
                         <span
                           title={item.libros_catalogo.premios}
-                          className="absolute top-2 left-2 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-xs"
+                          className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-xs"
                         >
-                          <Award className="w-3 h-3" />
+                          <Award className="w-2.5 h-2.5" />
                         </span>
                       )}
 
-                      <span
-                        className={`absolute top-2 right-2 text-[10px] font-semibold px-2 py-0.5 rounded-full shadow-xs ${
-                          item.estado === 'disponible'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : item.estado === 'prestado'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {item.estado === 'disponible'
-                          ? 'Disponible'
-                          : item.estado === 'prestado'
-                          ? 'Prestado'
-                          : 'No disponible'}
-                      </span>
+                      {item.estado === 'disponible' ? (
+                        <span
+                          title="Disponible"
+                          className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white shadow-xs"
+                        />
+                      ) : (
+                        <span
+                          className={`absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-xs ${
+                            item.estado === 'prestado'
+                              ? 'bg-blue-600/95 text-white'
+                              : 'bg-amber-500/95 text-white'
+                          }`}
+                        >
+                          {item.estado === 'prestado' ? 'Prestado' : 'No disp.'}
+                        </span>
+                      )}
 
                       {item.media_estrellas && (
-                        <span className="absolute bottom-2 left-2 bg-stone-900/85 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                        <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-xs">
                           <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
                           <span>{item.media_estrellas}</span>
-                          <span className="text-stone-300">({item.resenas_count})</span>
                         </span>
                       )}
                     </div>
 
-                    <div className="p-3 flex-1 flex flex-col justify-between space-y-2.5">
+                    <div className="p-2 flex-1 flex flex-col justify-between gap-1.5">
                       <div>
-                        <h3 className="font-semibold text-stone-900 text-xs line-clamp-2">
+                        <h3 className="font-semibold text-stone-900 text-[11px] leading-snug line-clamp-2 group-hover:text-emerald-800 transition">
                           {item.libros_catalogo?.titulo}
                         </h3>
-                        <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">
-                          {item.libros_catalogo?.autor}
+                        <p className="text-[10px] text-stone-500 mt-0.5 truncate">
+                          {esMio ? (
+                            <span className="text-stone-400">Tuyo</span>
+                          ) : (
+                            <>
+                              De <strong className="text-stone-700">{item.propietario_nombre}</strong>
+                            </>
+                          )}
                         </p>
-                        <div className="flex items-center justify-between mt-1">
-                          <p className="text-[10px] text-stone-400">
-                            De: <strong className="text-stone-600">{item.propietario_nombre}</strong>
-                          </p>
-                          <span className="text-[10px] text-emerald-700 font-medium flex items-center gap-0.5">
-                            <MessageSquare className="w-2.5 h-2.5" />
-                            <span>Reseñar</span>
-                          </span>
-                        </div>
                       </div>
 
                       {!esMio && item.estado === 'disponible' && (
@@ -666,14 +762,100 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                             solicitarPrestamo(item)
                           }}
                           disabled={solicitandoId === item.id}
-                          className="w-full py-1.5 px-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          className="w-full py-1 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
                         >
-                          <Send className="w-3 h-3" />
-                          <span>
-                            {solicitandoId === item.id ? 'Pidiendo...' : 'Pedir prestado'}
-                          </span>
+                          <Send className="w-2.5 h-2.5" />
+                          <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
                         </button>
                       )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            /* VISTA LISTA DETALLADA */
+            <div className="space-y-2">
+              {librosFiltrados.map((item) => {
+                const esMio = item.propietario_id === userId
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => abrirDetalleClub(item)}
+                    className="bg-white rounded-xl border border-stone-200 p-2.5 flex items-center gap-3 cursor-pointer hover:border-emerald-500 transition"
+                  >
+                    <div className="w-11 h-16 rounded-lg overflow-hidden bg-stone-100 shrink-0 relative">
+                      <PortadaLibro
+                        src={item.libros_catalogo?.portada_url}
+                        alt={item.libros_catalogo?.titulo || 'Libro'}
+                        isbn={item.isbn}
+                      />
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="font-semibold text-stone-900 text-xs line-clamp-1">
+                          {item.libros_catalogo?.titulo}
+                        </h3>
+                        <span
+                          className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                            item.estado === 'disponible'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : item.estado === 'prestado'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {item.estado === 'disponible'
+                            ? 'Disponible'
+                            : item.estado === 'prestado'
+                            ? 'Prestado'
+                            : 'No disponible'}
+                        </span>
+                      </div>
+
+                      <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                        {item.libros_catalogo?.autor}
+                      </p>
+
+                      <div className="flex items-center justify-between gap-2 mt-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                          <span className="text-[10px] text-stone-500">
+                            De: <strong className="text-stone-700">{item.propietario_nombre}</strong>
+                          </span>
+                          {item.libros_catalogo?.genero && (
+                            <span className="text-[10px] font-medium bg-stone-100 text-stone-600 px-2 py-0.5 rounded-md truncate">
+                              {item.libros_catalogo.genero}
+                            </span>
+                          )}
+                          {item.media_estrellas && (
+                            <span className="text-[10px] font-semibold text-amber-700 inline-flex items-center gap-0.5">
+                              <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                              {item.media_estrellas} ({item.resenas_count})
+                            </span>
+                          )}
+                        </div>
+
+                        {!esMio && item.estado === 'disponible' ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              solicitarPrestamo(item)
+                            }}
+                            disabled={solicitandoId === item.id}
+                            className="shrink-0 py-1 px-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                          >
+                            <Send className="w-2.5 h-2.5" />
+                            <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
+                          </button>
+                        ) : (
+                          <span className="shrink-0 text-[10px] text-emerald-700 font-medium flex items-center gap-0.5">
+                            <MessageSquare className="w-3 h-3" />
+                            <span>Ficha</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
