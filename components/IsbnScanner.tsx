@@ -7,6 +7,7 @@ import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import {
   Camera,
   Check,
+  Crosshair,
   Flashlight,
   Keyboard,
   Loader2,
@@ -46,26 +47,34 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
   const [procesando, setProcesando] = useState(false)
   const [errorCamara, setErrorCamara] = useState<string | null>(null)
   const [linternaActiva, setLinternaActiva] = useState(false)
-  const [soportaLinterna, setSoportaLinterna] = useState(false)
   const [zoomActivo, setZoomActivo] = useState(false)
-  const [soportaZoom, setSoportaZoom] = useState(false)
-  const [camarasTraseras, setCamarasTraseras] = useState<{ id: string; label: string }[]>([])
+  const [camarasDisponibles, setCamarasDisponibles] = useState<{ id: string; label: string }[]>([])
   const [indiceCamara, setIndiceCamara] = useState(0)
+  const [mensajeCamara, setMensajeCamara] = useState<string | null>(null)
   const [fichaPrevia, setFichaPrevia] = useState<FichaLibroPrevia | null>(null)
 
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const videoTrackRef = useRef<MediaStreamTrack | null>(null)
   const escaneadoRef = useRef(false)
 
+  const mostrarAvisoTemporal = (texto: string) => {
+    setMensajeCamara(texto)
+    setTimeout(() => {
+      setMensajeCamara((actual) => (actual === texto ? null : actual))
+    }, 2500)
+  }
+
   const detenerCamaraSegura = useCallback(async () => {
     const track = videoTrackRef.current
     if (track) {
       try {
-        if (linternaActiva) {
-          await track.applyConstraints({
-            advanced: [{ torch: false } as MediaTrackConstraintSet],
-          })
-        }
+        await track.applyConstraints({
+          advanced: [{ torch: false } as MediaTrackConstraintSet],
+        })
+      } catch {
+        // Ignorar
+      }
+      try {
         track.stop()
       } catch {
         // Ignorar
@@ -85,7 +94,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         // Ignorar si ya estaba detenido
       }
     }
-  }, [linternaActiva])
+  }, [])
 
   const guardarLibroEnEstanteria = useCallback(
     async (datos: FichaLibroPrevia, seguirEscaneando: boolean) => {
@@ -332,14 +341,35 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     buscarRef.current = buscarFichaPorIsbn
   }, [buscarFichaPorIsbn])
 
+  const forzarEnfoque = useCallback(async (track: MediaStreamTrack | null, avisar = false) => {
+    if (!track || typeof track.getCapabilities !== 'function') return
+    try {
+      const caps = track.getCapabilities() as MediaTrackCapabilities & {
+        focusMode?: string[]
+      }
+      if (caps.focusMode?.includes('single-shot')) {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'single-shot' } as MediaTrackConstraintSet],
+        })
+        await new Promise((r) => setTimeout(r, 300))
+      }
+      if (caps.focusMode?.includes('continuous')) {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+        })
+      }
+      if (avisar) mostrarAvisoTemporal('Enfoque actualizado')
+    } catch {
+      if (avisar) mostrarAvisoTemporal('Autoenfoque gestionado por el sistema')
+    }
+  }, [])
+
   useEffect(() => {
     if (modo !== 'camara' || fichaPrevia) return
 
     let montado = true
     escaneadoRef.current = false
     setErrorCamara(null)
-    setSoportaLinterna(false)
-    setSoportaZoom(false)
     setLinternaActiva(false)
     setZoomActivo(false)
 
@@ -359,7 +389,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         })
         scannerRef.current = html5Qr
 
-        const camaraElegida = camarasTraseras[indiceCamara]
+        const camaraElegida = camarasDisponibles[indiceCamara]
         const configCamara: string | MediaTrackConstraints = camaraElegida?.id
           ? camaraElegida.id
           : { facingMode: 'environment' }
@@ -413,27 +443,20 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           return
         }
 
-        // Ahora que ya hay permiso concedido, enumerar solo las cámaras traseras reales
-        if (camarasTraseras.length === 0) {
+        // Enumerar cámaras tras permiso concedido (excluyendo solo la frontal)
+        if (camarasDisponibles.length === 0) {
           try {
             const todas = await Html5Qrcode.getCameras()
-            const traseras = todas.filter((c) =>
-              /back|rear|trasera|environment/i.test(c.label)
-            )
-            if (montado && traseras.length > 1) {
-              const ordenadas = [...traseras].sort((a, b) => {
-                const esGranAngularA = /wide|ultra|0\.5|0\.6|macro/i.test(a.label) ? 1 : 0
-                const esGranAngularB = /wide|ultra|0\.5|0\.6|macro/i.test(b.label) ? 1 : 0
-                return esGranAngularA - esGranAngularB
-              })
-              setCamarasTraseras(ordenadas)
+            const noFrontales = todas.filter((c) => !/front|frontal|selfie/i.test(c.label))
+            const lista = noFrontales.length > 0 ? noFrontales : todas
+            if (montado && lista.length > 0) {
+              setCamarasDisponibles(lista)
             }
           } catch {
             // Ignorar
           }
         }
 
-        // Esperar 500 ms para que el driver de cámara de Android estabilice capacidades
         await new Promise((r) => setTimeout(r, 500))
         if (!montado) return
 
@@ -445,35 +468,19 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         if (track && typeof track.getCapabilities === 'function') {
           try {
             const caps = track.getCapabilities() as MediaTrackCapabilities & {
-              focusMode?: string[]
-              torch?: boolean
-              zoom?: { min: number; max: number; step: number }
+              zoom?: { min: number; max: number }
             }
-
-            if (caps.torch) {
-              setSoportaLinterna(true)
-            }
-
-            if (caps.focusMode?.includes('continuous')) {
+            if (caps.zoom && caps.zoom.max >= 1.6) {
               await track.applyConstraints({
-                advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+                advanced: [{ zoom: 1.6 } as MediaTrackConstraintSet],
               })
-            }
-
-            if (caps.zoom && caps.zoom.max > caps.zoom.min) {
-              setSoportaZoom(true)
-              // Subir zoom a 1.6x permite escanear desde más lejos sin perder foco
-              const zoomInicial = Math.min(1.6, caps.zoom.max)
-              if (zoomInicial > (caps.zoom.min || 1)) {
-                await track.applyConstraints({
-                  advanced: [{ zoom: zoomInicial } as MediaTrackConstraintSet],
-                })
-                setZoomActivo(true)
-              }
+              setZoomActivo(true)
             }
           } catch {
-            // Ignorar si algún constraint individual no es aceptado
+            // Ignorar
           }
+          // Disparar pulso de enfoque para evitar que quede clavado en el fondo
+          await forzarEnfoque(track, false)
         }
       } catch {
         if (montado) {
@@ -490,7 +497,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       montado = false
       detenerCamaraSegura()
     }
-  }, [modo, fichaPrevia, indiceCamara, camarasTraseras, detenerCamaraSegura])
+  }, [modo, fichaPrevia, indiceCamara, camarasDisponibles, detenerCamaraSegura, forzarEnfoque])
 
   const toggleLinterna = async () => {
     const track = videoTrackRef.current
@@ -502,12 +509,11 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       })
       setLinternaActiva(nuevoEstado)
     } catch {
-      // Fallback directo por si el navegador prefiere constraint no-advanced
       try {
         await track.applyConstraints({ torch: nuevoEstado } as MediaTrackConstraintSet)
         setLinternaActiva(nuevoEstado)
       } catch {
-        alert('Tu navegador no permite activar el flash en esta lente. Prueba cambiando de lente.')
+        mostrarAvisoTemporal('Este navegador no permite controlar el flash en esta lente')
       }
     }
   }
@@ -519,44 +525,28 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       const caps = track.getCapabilities() as MediaTrackCapabilities & {
         zoom?: { min: number; max: number }
       }
-      if (!caps.zoom) return
-      const nuevoZoom = zoomActivo ? caps.zoom.min || 1 : Math.min(1.6, caps.zoom.max)
+      if (!caps.zoom || caps.zoom.max <= (caps.zoom.min || 1)) {
+        mostrarAvisoTemporal('Zoom no disponible en esta lente')
+        return
+      }
+      const nuevoZoom = zoomActivo ? caps.zoom.min || 1 : Math.min(1.8, caps.zoom.max)
       await track.applyConstraints({
         advanced: [{ zoom: nuevoZoom } as MediaTrackConstraintSet],
       })
       setZoomActivo(!zoomActivo)
+      await forzarEnfoque(track, false)
     } catch {
-      // Ignorar
-    }
-  }
-
-  const tocarParaEnfocar = async () => {
-    const track = videoTrackRef.current
-    if (!track || typeof track.getCapabilities !== 'function') return
-    try {
-      const caps = track.getCapabilities() as MediaTrackCapabilities & {
-        focusMode?: string[]
-      }
-      // Forzar ciclo single-shot -> continuous obliga a la lente de Android a reenfocar al instante
-      if (caps.focusMode?.includes('single-shot')) {
-        await track.applyConstraints({
-          advanced: [{ focusMode: 'single-shot' } as MediaTrackConstraintSet],
-        })
-        await new Promise((r) => setTimeout(r, 250))
-      }
-      if (caps.focusMode?.includes('continuous')) {
-        await track.applyConstraints({
-          advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
-        })
-      }
-    } catch {
-      // Ignorar
+      mostrarAvisoTemporal('Zoom no soportado')
     }
   }
 
   const cambiarLente = async () => {
+    if (camarasDisponibles.length <= 1) {
+      mostrarAvisoTemporal('Solo hay 1 cámara trasera expuesta por el navegador')
+      return
+    }
     await detenerCamaraSegura()
-    setIndiceCamara((prev) => prev + 1)
+    setIndiceCamara((prev) => (prev + 1) % camarasDisponibles.length)
   }
 
   const handleCerrar = async () => {
@@ -636,7 +626,6 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               }}
               className="space-y-3.5 py-1"
             >
-              {/* Cabecera visual con portada + estado de recuperación */}
               <div className="flex gap-3.5 bg-stone-50 border border-stone-200 rounded-2xl p-3">
                 <div className="w-16 h-24 rounded-lg overflow-hidden bg-stone-200 shrink-0 border border-stone-200 flex items-center justify-center">
                   {fichaPrevia.portadaUrl ? (
@@ -804,59 +793,69 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               ) : (
                 <>
                   <div
-                    onClick={tocarParaEnfocar}
+                    onClick={() => forzarEnfoque(videoTrackRef.current, true)}
                     className="relative rounded-2xl overflow-hidden bg-black border border-stone-200 cursor-pointer"
                   >
                     <div id="reader-isbn" className="w-full" />
 
-<div
-                      className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5 z-10"
+                    {mensajeCamara && (
+                      <div className="absolute top-2.5 left-1/2 -translate-x-1/2 bg-black/80 text-white text-[11px] px-3 py-1 rounded-full z-20 whitespace-nowrap">
+                        {mensajeCamara}
+                      </div>
+                    )}
+
+                    <div
+                      className="absolute bottom-2.5 inset-x-2.5 flex items-center justify-end gap-1.5 z-10 flex-wrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {camarasTraseras.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={cambiarLente}
-                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-black/70 text-white hover:bg-black/85 flex items-center gap-1 transition cursor-pointer"
-                          title="Cambiar de lente trasera"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Lente</span>
-                        </button>
-                      )}
-                      {soportaZoom && (
-                        <button
-                          type="button"
-                          onClick={toggleZoom}
-                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
-                            zoomActivo
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-black/70 text-white hover:bg-black/85'
-                          }`}
-                        >
-                          <ZoomIn className="w-3.5 h-3.5" />
-                          <span>{zoomActivo ? '1.5x' : '1x'}</span>
-                        </button>
-                      )}
-                      {soportaLinterna && (
-                        <button
-                          type="button"
-                          onClick={toggleLinterna}
-                          className={`p-2 rounded-lg transition cursor-pointer ${
-                            linternaActiva
-                              ? 'bg-amber-400 text-stone-950'
-                              : 'bg-black/70 text-white hover:bg-black/85'
-                          }`}
-                          title="Encender/apagar linterna"
-                        >
-                          <Flashlight className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => forzarEnfoque(videoTrackRef.current, true)}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-black/75 text-white hover:bg-black flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <Crosshair className="w-3.5 h-3.5" />
+                        <span>Enfocar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={cambiarLente}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-black/75 text-white hover:bg-black flex items-center gap-1 transition cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Lente</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={toggleZoom}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
+                          zoomActivo
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-black/75 text-white hover:bg-black'
+                        }`}
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                        <span>{zoomActivo ? '1.6x' : '1x'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={toggleLinterna}
+                        className={`p-2 rounded-lg transition cursor-pointer ${
+                          linternaActiva
+                            ? 'bg-amber-400 text-stone-950'
+                            : 'bg-black/75 text-white hover:bg-black'
+                        }`}
+                        title="Encender/apagar linterna"
+                      >
+                        <Flashlight className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
 
                   <p className="text-[11px] text-stone-500 text-center leading-relaxed">
-                    Mantén el móvil a <strong>18–25 cm</strong> del código de barras y <strong>toca la pantalla</strong> para reenfocar. Si se ve desenfocado de cerca, pulsa <strong>Lente</strong>.
+                    Mantén el móvil a <strong>20–25 cm</strong> del código de barras. Si ves el libro borroso, pulsa <strong>Enfocar</strong> o cambia de <strong>Lente</strong>.
                   </p>
                 </>
               )}
