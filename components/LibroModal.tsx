@@ -1215,11 +1215,13 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                   <div>
                     <p className="text-xs font-semibold">
                       {visibleLocal
-                        ? `Visible en tu barrio${codigoPostalUsuario ? ` (CP ${codigoPostalUsuario})` : ''}`
-                        : 'Oculto para vecinos'}
+                        ? `Compartido en tu zona${codigoPostalUsuario ? ` (CP ${codigoPostalUsuario})` : ''}`
+                        : `¿Quieres compartir en tu zona${codigoPostalUsuario ? ` (CP ${codigoPostalUsuario})` : ''}?`}
                     </p>
                     <p className="text-[11px] text-stone-500 mt-0.5">
-                      Tu nombre y correo permanecen ocultos hasta que aceptes un préstamo.
+                      {visibleLocal
+                        ? 'Visible de forma anónima. Tu nombre y correo siguen ocultos hasta que aceptes un préstamo.'
+                        : 'Actívalo para que tus vecinos puedan verlo. Tu nombre y correo siguen ocultos hasta que aceptes.'}
                     </p>
                   </div>
                   <span
