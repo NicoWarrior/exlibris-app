@@ -4,10 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { comprimirImagen } from '@/utils/comprimirImagen'
 import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
 import {
   Award,
   BookCheck,
+  Bookmark,
+  BookmarkCheck,
   BookOpen,
   Camera,
   Check,
@@ -115,9 +118,11 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [miComentario, setMiComentario] = useState('')
   const [guardandoResena, setGuardandoResena] = useState(false)
 
-  // Estados para solicitud directa de préstamo
+  // Estados para solicitud directa de préstamo y lista Por leer
   const [estadoPrestamoExistente, setEstadoPrestamoExistente] = useState<string | null>(null)
   const [solicitandoPrestamo, setSolicitandoPrestamo] = useState(false)
+  const [enListaDeseos, setEnListaDeseos] = useState(false)
+  const [guardandoDeseo, setGuardandoDeseo] = useState(false)
 
   const onActualizadoRef = useRef(onActualizado)
   useEffect(() => {
@@ -187,6 +192,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setMiPuntuacion(5)
     setMiComentario('')
     setEstadoPrestamoExistente(null)
+    setEnListaDeseos(false)
 
     const cargarDatosModal = async () => {
       const {
@@ -232,18 +238,26 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
           setClubesCompartidos(compartidos?.map((c) => c.club_id) || [])
         } else {
-          // Comprobar si el usuario ya tiene un préstamo/solicitud activa de este ejemplar
-          const { data: prestamoActivo } = await supabase
-            .from('prestamos')
-            .select('estado')
-            .eq('ejemplar_id', libro.ejemplarId)
-            .eq('prestatario_id', user.id)
-            .in('estado', ['solicitado', 'aceptado', 'entregado'])
-            .maybeSingle()
+          const [{ data: prestamoActivo }, { data: deseoExistente }] = await Promise.all([
+            supabase
+              .from('prestamos')
+              .select('estado')
+              .eq('ejemplar_id', libro.ejemplarId)
+              .eq('lector_id', user.id)
+              .in('estado', ['solicitado', 'aceptado', 'entregado'])
+              .maybeSingle(),
+            supabase
+              .from('lista_deseos')
+              .select('id')
+              .eq('usuario_id', user.id)
+              .eq('isbn', libro.isbn)
+              .maybeSingle(),
+          ])
 
           if (prestamoActivo?.estado) {
             setEstadoPrestamoExistente(prestamoActivo.estado)
           }
+          setEnListaDeseos(Boolean(deseoExistente))
         }
       }
 
@@ -384,14 +398,55 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
   if (!libro) return null
 
+  const toggleDeseoDesdeModal = async () => {
+    if (!currentUserId || guardandoDeseo) return
+    setGuardandoDeseo(true)
+
+    if (enListaDeseos) {
+      const { error } = await supabase
+        .from('lista_deseos')
+        .delete()
+        .eq('usuario_id', currentUserId)
+        .eq('isbn', libro.isbn)
+
+      if (!error) {
+        setEnListaDeseos(false)
+        onActualizadoRef.current()
+      }
+    } else {
+      const { error } = await supabase.from('lista_deseos').upsert(
+        {
+          usuario_id: currentUserId,
+          ejemplar_id: libro.ejemplarId,
+          club_id: libro.clubId || null,
+          isbn: libro.isbn,
+          titulo: tituloActual,
+          autor: autorActual,
+          portada_url: portadaActual || '',
+          propietario_nombre: libro.propietarioNombre,
+        },
+        { onConflict: 'usuario_id,isbn' }
+      )
+
+      if (!error) {
+        setEnListaDeseos(true)
+        onActualizadoRef.current()
+      } else {
+        alert(`No se pudo guardar en Por leer: ${error.message}`)
+      }
+    }
+
+    setGuardandoDeseo(false)
+  }
+
   const solicitarPrestamoDesdeModal = async () => {
     if (!currentUserId || solicitandoPrestamo || estadoPrestamoExistente) return
     setSolicitandoPrestamo(true)
 
     try {
-      let prestamistaId = libro.propietarioId
+      let propietarioId = libro.propietarioId
 
-      if (!prestamistaId) {
+      if (!propietarioId) {
         const { data: ejInfo, error: ejError } = await supabase
           .from('ejemplares')
           .select('propietario_id')
@@ -401,33 +456,31 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         if (ejError || !ejInfo?.propietario_id) {
           throw new Error('No se pudo localizar al propietario del ejemplar.')
         }
-        prestamistaId = ejInfo.propietario_id
+        propietarioId = ejInfo.propietario_id
       }
 
-      if (prestamistaId === currentUserId) {
+      if (propietarioId === currentUserId) {
         throw new Error('No puedes solicitar un libro de tu propia estantería.')
       }
 
       const { error: insertError } = await supabase.from('prestamos').insert({
         ejemplar_id: libro.ejemplarId,
-        prestamista_id: prestamistaId,
-        prestatario_id: currentUserId,
+        propietario_id: propietarioId,
+        lector_id: currentUserId,
         club_id: libro.clubId || null,
         estado: 'solicitado',
       })
 
       if (insertError) throw insertError
 
-      // Intentar enviar notificación push sin bloquear si falla
-      fetch('/api/notificaciones/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          receptorId: prestamistaId,
-          titulo: 'Nueva solicitud de préstamo',
-          cuerpo: `Alguien quiere leer "${tituloActual}"`,
-        }),
-      }).catch(() => {})
+      enviarNotificacionPush({
+        destinatarioId: propietarioId,
+        titulo: libro.clubNombre
+          ? `Nueva solicitud en ${libro.clubNombre}`
+          : 'Nueva solicitud de préstamo',
+        cuerpo: `Te han pedido prestado "${tituloActual}"`,
+        url: '/',
+      })
 
       setEstadoPrestamoExistente('solicitado')
       onActualizadoRef.current()
@@ -804,9 +857,9 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          {/* BOTÓN DIRECTO DE SOLICITAR PRÉSTAMO PARA LIBROS DE AMIGOS / VECINOS */}
+          {/* BOTONES DE SOLICITAR PRÉSTAMO Y GUARDAR EN POR LEER */}
           {!libro.esPropio && (
-            <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 space-y-3">
               <div className="text-xs">
                 <p className="font-semibold text-stone-800">
                   Ejemplar de <span className="text-emerald-800">{libro.propietarioNombre}</span>
@@ -817,44 +870,69 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
                     : estadoPrestamoExistente
                     ? 'Actualmente tienes este préstamo activo.'
                     : estado === 'disponible'
-                    ? 'Disponible para préstamo gratuito.'
-                    : 'Este ejemplar no está disponible en este momento.'}
+                    ? 'Disponible para préstamo gratuito o para guardar en tu lista Por leer.'
+                    : 'Ahora mismo está prestado, pero puedes guardarlo en Por leer para pedirlo después.'}
                 </p>
               </div>
 
-              {estadoPrestamoExistente ? (
-                <span className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-200 shrink-0">
-                  {estadoPrestamoExistente === 'solicitado' ? (
-                    <>
-                      <Clock className="w-4 h-4" />
-                      <span>Solicitud enviada</span>
-                    </>
-                  ) : (
-                    <>
-                      <BookCheck className="w-4 h-4" />
-                      <span>Préstamo activo</span>
-                    </>
-                  )}
-                </span>
-              ) : estado === 'disponible' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {estadoPrestamoExistente ? (
+                  <span className="flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-200">
+                    {estadoPrestamoExistente === 'solicitado' ? (
+                      <>
+                        <Clock className="w-4 h-4" />
+                        <span>Solicitud enviada</span>
+                      </>
+                    ) : (
+                      <>
+                        <BookCheck className="w-4 h-4" />
+                        <span>Préstamo activo</span>
+                      </>
+                    )}
+                  </span>
+                ) : estado === 'disponible' ? (
+                  <button
+                    type="button"
+                    onClick={solicitarPrestamoDesdeModal}
+                    disabled={solicitandoPrestamo}
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs cursor-pointer transition disabled:opacity-50"
+                  >
+                    {solicitandoPrestamo ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <HandHelping className="w-4 h-4" />
+                    )}
+                    <span>{solicitandoPrestamo ? 'Enviando...' : 'Solicitar préstamo'}</span>
+                  </button>
+                ) : (
+                  <span className="flex-1 inline-flex items-center justify-center px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-stone-200/80 text-stone-600">
+                    No disponible ahora
+                  </span>
+                )}
+
                 <button
                   type="button"
-                  onClick={solicitarPrestamoDesdeModal}
-                  disabled={solicitandoPrestamo}
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs cursor-pointer transition disabled:opacity-50 shrink-0"
+                  onClick={toggleDeseoDesdeModal}
+                  disabled={guardandoDeseo}
+                  className={`inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition cursor-pointer shrink-0 ${
+                    enListaDeseos
+                      ? 'bg-amber-100 border-amber-300 text-amber-900'
+                      : 'bg-white border-stone-300 text-stone-700 hover:bg-stone-50'
+                  }`}
                 >
-                  {solicitandoPrestamo ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                  {enListaDeseos ? (
+                    <>
+                      <BookmarkCheck className="w-4 h-4 text-amber-700" />
+                      <span>En Por leer</span>
+                    </>
                   ) : (
-                    <HandHelping className="w-4 h-4" />
+                    <>
+                      <Bookmark className="w-4 h-4 text-amber-600" />
+                      <span>Por leer</span>
+                    </>
                   )}
-                  <span>{solicitandoPrestamo ? 'Enviando...' : 'Solicitar préstamo'}</span>
                 </button>
-              ) : (
-                <span className="inline-flex items-center justify-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-stone-200/80 text-stone-600 shrink-0">
-                  No disponible
-                </span>
-              )}
+              </div>
             </div>
           )}
 
