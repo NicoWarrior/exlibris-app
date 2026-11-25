@@ -79,6 +79,9 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [copiado, setCopiado] = useState(false)
   const [menuCompartirAbierto, setMenuCompartirAbierto] = useState(false)
   const [invitacionCopiada, setInvitacionCopiada] = useState(false)
+  const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
+  const [deseosIsbns, setDeseosIsbns] = useState<Set<string>>(new Set())
+  const [guardandoDeseoId, setGuardandoDeseoId] = useState<string | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -89,9 +92,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       setModoFormulario('unirse')
     }
   }, [])
-  const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
-  const [deseosIsbns, setDeseosIsbns] = useState<Set<string>>(new Set())
-  const [guardandoDeseoId, setGuardandoDeseoId] = useState<string | null>(null)
 
   const cargarMisDeseos = useCallback(async () => {
     const { data } = await supabase
@@ -242,6 +242,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   useEffect(() => {
     if (clubActivo) {
       cargarLibrosDelClub(clubActivo.id)
+      setMenuCompartirAbierto(false)
     }
   }, [clubActivo, cargarLibrosDelClub])
 
@@ -406,6 +407,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setCopiado(true)
     setTimeout(() => setCopiado(false), 2000)
   }
+
   const generarDatosInvitacion = () => {
     if (!clubActivo) return { url: '', texto: '', asunto: '' }
     const origin =
@@ -430,7 +432,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         setMenuCompartirAbierto(false)
         return
       } catch {
-        // Si el usuario cancela o falla, abrimos el menú con las opciones explícitas
+        // Si el usuario cancela o falla, abrimos el menú desplegable
       }
     }
     setMenuCompartirAbierto((prev) => !prev)
@@ -516,6 +518,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       </div>
     )
   }
+
+  const datosCompartir = generarDatosInvitacion()
 
   return (
     <div className="space-y-4">
@@ -617,7 +621,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             </p>
           </div>
 
-          {/* Tarjetas de ejemplo (desaparecen al crear o unirte a un club) */}
           <div className="grid grid-cols-3 gap-2.5 sm:gap-3 max-w-md mx-auto select-none pointer-events-none">
             {[
               {
@@ -742,94 +745,87 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                   <span>Compartir</span>
                 </button>
 
-                {menuCompartirAbierto && (() => {
-                  const { url, texto, asunto } = generarDatosInvitacion()
-                  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(texto)}`
-                  const mailUrl = `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(texto)}`
-                  const telegramUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(`Únete a "${clubActivo.nombre}" en Exlibris · Código: ${clubActivo.codigo_invitacion}`)}`
-                  const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(`¡Compartimos estantería en "${clubActivo.nombre}" en Exlibris! Código: ${clubActivo.codigo_invitacion} ${url}`)}`
-
-                  return (
-                    <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-stone-200 rounded-2xl shadow-lg p-1.5 z-30 space-y-0.5">
-                      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-stone-100">
-                        <span className="text-[11px] font-bold text-stone-800">
-                          Invitar al club
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setMenuCompartirAbierto(false)}
-                          className="text-stone-400 hover:text-stone-700 cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <a
-                        href={whatsappUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setMenuCompartirAbierto(false)}
-                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-emerald-50 hover:text-emerald-900 transition"
-                      >
-                        <MessageSquare className="w-4 h-4 text-emerald-600" />
-                        <span>WhatsApp</span>
-                      </a>
-
-                      <a
-                        href={mailUrl}
-                        onClick={() => setMenuCompartirAbierto(false)}
-                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
-                      >
-                        <Mail className="w-4 h-4 text-sky-600" />
-                        <span>Correo electrónico</span>
-                      </a>
-
-                      <a
-                        href={telegramUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setMenuCompartirAbierto(false)}
-                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
-                      >
-                        <Send className="w-4 h-4 text-sky-500" />
-                        <span>Telegram</span>
-                      </a>
-
-                      <a
-                        href={xUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setMenuCompartirAbierto(false)}
-                        className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
-                      >
-                        <Share2 className="w-4 h-4 text-stone-700" />
-                        <span>X / Redes sociales</span>
-                      </a>
-
+                {menuCompartirAbierto && (
+                  <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-stone-200 rounded-2xl shadow-lg p-1.5 z-30 space-y-0.5">
+                    <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-stone-100">
+                      <span className="text-[11px] font-bold text-stone-800">
+                        Invitar al club
+                      </span>
                       <button
                         type="button"
-                        onClick={copiarInvitacionCompleta}
-                        className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition cursor-pointer border-t border-stone-100 mt-1 pt-2"
+                        onClick={() => setMenuCompartirAbierto(false)}
+                        className="text-stone-400 hover:text-stone-700 cursor-pointer"
                       >
-                        {invitacionCopiada ? (
-                          <>
-                            <Check className="w-4 h-4 text-emerald-600" />
-                            <span className="text-emerald-700 font-semibold">
-                              ¡Invitación copiada!
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-4 h-4 text-stone-500" />
-                            <span>Copiar mensaje y enlace</span>
-                          </>
-                        )}
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                  )
-                })()}
+
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(datosCompartir.texto)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setMenuCompartirAbierto(false)}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-emerald-50 hover:text-emerald-900 transition"
+                    >
+                      <MessageSquare className="w-4 h-4 text-emerald-600" />
+                      <span>WhatsApp</span>
+                    </a>
+
+                    <a
+                      href={`mailto:?subject=${encodeURIComponent(datosCompartir.asunto)}&body=${encodeURIComponent(datosCompartir.texto)}`}
+                      onClick={() => setMenuCompartirAbierto(false)}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
+                    >
+                      <Mail className="w-4 h-4 text-sky-600" />
+                      <span>Correo electrónico</span>
+                    </a>
+
+                    <a
+                      href={`https://t.me/share/url?url=${encodeURIComponent(datosCompartir.url)}&text=${encodeURIComponent(`Únete a "${clubActivo.nombre}" en Exlibris · Código: ${clubActivo.codigo_invitacion}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setMenuCompartirAbierto(false)}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
+                    >
+                      <Send className="w-4 h-4 text-sky-500" />
+                      <span>Telegram</span>
+                    </a>
+
+                    <a
+                      href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`¡Compartimos estantería en "${clubActivo.nombre}" en Exlibris! Código: ${clubActivo.codigo_invitacion} ${datosCompartir.url}`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setMenuCompartirAbierto(false)}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition"
+                    >
+                      <Share2 className="w-4 h-4 text-stone-700" />
+                      <span>X / Redes sociales</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={copiarInvitacionCompleta}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-medium text-stone-700 hover:bg-stone-100 transition cursor-pointer border-t border-stone-100 mt-1 pt-2"
+                    >
+                      {invitacionCopiada ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-600" />
+                          <span className="text-emerald-700 font-semibold">
+                            ¡Invitación copiada!
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4 text-stone-500" />
+                          <span>Copiar mensaje y enlace</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
+          </div>
 
           {librosClub.length > 0 && (
             <div className="space-y-3">
