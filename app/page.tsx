@@ -304,6 +304,12 @@ export default function Home() {
     }
   }, [user?.id, supabase, cargarDatos])
 
+  useEffect(() => {
+    if (user?.id && tab === 'estanteria') {
+      cargarDatos(user.id)
+    }
+  }, [tab, user?.id, cargarDatos])
+
   const generosEstanteria = useMemo(() => {
     const unicos = new Set<string>()
     misLibros.forEach((item) => {
@@ -392,9 +398,11 @@ export default function Home() {
     return (
       <main className="min-h-screen flex flex-col items-center justify-center bg-stone-50 px-6 text-center">
         <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-sm border border-stone-200">
-          <div className="w-14 h-14 bg-emerald-100 text-emerald-800 rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <BookOpen className="w-7 h-7" />
-          </div>
+          <img
+            src="/logo.png"
+            alt="Exlibris"
+            className="w-20 h-20 rounded-2xl object-cover mx-auto mb-5 shadow-xs border border-stone-200/80"
+          />
           <h1 className="text-2xl font-bold text-stone-900 mb-2">Exlibris</h1>
           <p className="text-stone-600 text-sm mb-8">
             Tu estantería digital compartida. Escanea tus libros físicos, únete a clubes de lectura y presta ejemplares a tus amigos o vecinos.
@@ -424,8 +432,12 @@ export default function Home() {
     <div className="min-h-screen bg-stone-50 pb-24">
       <header className="bg-white border-b border-stone-200 sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-stone-900 text-lg">
-            <BookOpen className="w-5 h-5 text-emerald-700" />
+          <div className="flex items-center gap-2.5 font-bold text-stone-900 text-lg">
+            <img
+              src="/logo.png"
+              alt="Exlibris"
+              className="w-8 h-8 rounded-lg object-cover shrink-0 border border-stone-200/80"
+            />
             <span>Exlibris</span>
           </div>
           <div className="flex items-center gap-1.5">
