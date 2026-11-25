@@ -53,7 +53,9 @@ interface ClubItem {
 interface ResenaItem {
   id: string
   usuario_id: string
+  club_id: string | null
   usuario_nombre: string
+  es_del_club_actual: boolean
   puntuacion: number
   comentario: string | null
   creado_en: string
@@ -118,7 +120,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
   const [miComentario, setMiComentario] = useState('')
   const [guardandoResena, setGuardandoResena] = useState(false)
 
-  // Estados para solicitud directa de préstamo y lista Por leer
   const [estadoPrestamoExistente, setEstadoPrestamoExistente] = useState<string | null>(null)
   const [solicitandoPrestamo, setSolicitandoPrestamo] = useState(false)
   const [enListaDeseos, setEnListaDeseos] = useState(false)
@@ -131,19 +132,14 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
   const enriquecidoIsbnRef = useRef<string | null>(null)
 
-  const cargarResenas = useCallback(
-    async (isbn: string, clubId?: string | null) => {
-      if (!clubId) {
-        setResenas([])
-        return
-      }
+  const cargarResenasGlobales = useCallback(
+    async (isbn: string, uidActual: string | null, clubIdActual?: string | null) => {
       setCargandoResenas(true)
 
       const { data: resenasData } = await supabase
         .from('resenas_libro')
-        .select('id, usuario_id, puntuacion, comentario, creado_en')
+        .select('id, usuario_id, club_id, puntuacion, comentario, creado_en')
         .eq('isbn', isbn)
-        .eq('club_id', clubId)
         .order('creado_en', { ascending: false })
 
       if (!resenasData || resenasData.length === 0) {
@@ -152,19 +148,46 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         return
       }
 
-      const userIds = Array.from(new Set(resenasData.map((r) => r.usuario_id)))
-      const { data: perfilesData } = await supabase
-        .from('perfiles')
-        .select('id, nombre, nombre_usuario')
-        .in('id', userIds)
+      // Solo consultamos nombres de usuarios que pertenecen al mismo club activo o son el propio usuario
+      const idsIdentificables = Array.from(
+        new Set(
+          resenasData
+            .filter(
+              (r) =>
+                r.usuario_id === uidActual ||
+                (Boolean(clubIdActual) && r.club_id === clubIdActual)
+            )
+            .map((r) => r.usuario_id)
+        )
+      )
+
+      const { data: perfilesData } =
+        idsIdentificables.length > 0
+          ? await supabase
+              .from('perfiles')
+              .select('id, nombre, nombre_usuario')
+              .in('id', idsIdentificables)
+          : { data: [] }
 
       const combinadas: ResenaItem[] = resenasData.map((r) => {
+        const esPropia = r.usuario_id === uidActual
+        const esDelClub = Boolean(clubIdActual) && r.club_id === clubIdActual
         const perfil = perfilesData?.find((p) => p.id === r.usuario_id)
+
+        let nombreMostrar = 'Lector de Exlibris'
+        if (esPropia) {
+          nombreMostrar = perfil?.nombre || perfil?.nombre_usuario || 'Tú'
+        } else if (esDelClub) {
+          nombreMostrar =
+            perfil?.nombre || perfil?.nombre_usuario || `Miembro #${r.usuario_id.slice(0, 4)}`
+        }
+
         return {
           id: r.id,
           usuario_id: r.usuario_id,
-          usuario_nombre:
-            perfil?.nombre || perfil?.nombre_usuario || `Lector #${r.usuario_id.slice(0, 4)}`,
+          club_id: r.club_id,
+          usuario_nombre: nombreMostrar,
+          es_del_club_actual: esDelClub || esPropia,
           puntuacion: r.puntuacion,
           comentario: r.comentario,
           creado_en: r.creado_en,
@@ -199,9 +222,10 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         data: { user },
       } = await supabase.auth.getUser()
 
-      if (user) {
-        setCurrentUserId(user.id)
+      const uid = user?.id || null
+      setCurrentUserId(uid)
 
+      if (user) {
         if (libro.esPropio) {
           const [{ data: membresias }, { data: compartidos }, { data: ejData }, { data: perfilData }] =
             await Promise.all([
@@ -261,11 +285,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         }
       }
 
-      if (libro.clubId) {
-        await cargarResenas(libro.isbn, libro.clubId)
-      } else {
-        setResenas([])
-      }
+      await cargarResenasGlobales(libro.isbn, uid, libro.clubId)
     }
 
     cargarDatosModal()
@@ -384,7 +404,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
       }
       enriquecerCatalogo()
     }
-  }, [libro, supabase, cargarResenas])
+  }, [libro, supabase, cargarResenasGlobales])
 
   useEffect(() => {
     if (currentUserId && resenas.length > 0) {
@@ -439,7 +459,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
     setGuardandoDeseo(false)
   }
 
-const solicitarPrestamoDesdeModal = async () => {
+  const solicitarPrestamoDesdeModal = async () => {
     if (!currentUserId || solicitandoPrestamo || estadoPrestamoExistente) return
     setSolicitandoPrestamo(true)
 
@@ -460,7 +480,7 @@ const solicitarPrestamoDesdeModal = async () => {
       }
 
       if (!propietarioId || propietarioId === currentUserId) {
-        throw new Error('No puedes solicitar un libro de tu propia estantería.')
+        throw new Error('No puedes solicitar este ejemplar.')
       }
 
       const propietarioIdSeguro: string = propietarioId
@@ -654,25 +674,25 @@ const solicitarPrestamoDesdeModal = async () => {
 
   const guardarResena = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!currentUserId || !libro.clubId || guardandoResena) return
+    if (!currentUserId || guardandoResena) return
     setGuardandoResena(true)
 
     const { error } = await supabase.from('resenas_libro').upsert(
       {
         isbn: libro.isbn,
-        club_id: libro.clubId,
+        club_id: libro.clubId || null,
         usuario_id: currentUserId,
         puntuacion: miPuntuacion,
         comentario: miComentario.trim() || null,
       },
-      { onConflict: 'isbn,club_id,usuario_id' }
+      { onConflict: 'isbn,usuario_id' }
     )
 
     setGuardandoResena(false)
     if (error) {
       alert(`No se pudo guardar la reseña: ${error.message}`)
     } else {
-      await cargarResenas(libro.isbn, libro.clubId)
+      await cargarResenasGlobales(libro.isbn, currentUserId, libro.clubId)
       onActualizadoRef.current()
     }
   }
@@ -690,6 +710,9 @@ const solicitarPrestamoDesdeModal = async () => {
     resenas.length > 0
       ? (resenas.reduce((acc, r) => acc + r.puntuacion, 0) / resenas.length).toFixed(1)
       : null
+
+  const resenasDelClub = resenas.filter((r) => r.es_del_club_actual)
+  const resenasComunidad = resenas.filter((r) => !r.es_del_club_actual)
 
   const puedeEditarPortada = libro.esPropio || !portadaActual || portadaRota
 
@@ -845,7 +868,7 @@ const solicitarPrestamoDesdeModal = async () => {
                   <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                   <span>{mediaEstrellas} / 5</span>
                   <span className="text-amber-700/80 font-normal">
-                    ({resenas.length} {resenas.length === 1 ? 'opinión' : 'opiniones'})
+                    ({resenas.length} {resenas.length === 1 ? 'valoración' : 'valoraciones'})
                   </span>
                 </div>
               )}
@@ -897,7 +920,7 @@ const solicitarPrestamoDesdeModal = async () => {
                     type="button"
                     onClick={solicitarPrestamoDesdeModal}
                     disabled={solicitandoPrestamo}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-xs cursor-pointer transition disabled:opacity-50"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-2xs cursor-pointer transition disabled:opacity-50"
                   >
                     {solicitandoPrestamo ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -999,18 +1022,19 @@ const solicitarPrestamoDesdeModal = async () => {
             )}
           </div>
 
-          {libro.clubId && (
-            <div className="border-t border-stone-100 pt-4 space-y-3.5">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>Opiniones en {libro.clubNombre || 'el club'}</span>
-                </h3>
-                {mediaEstrellas && (
-                  <span className="text-xs font-bold text-stone-700">★ {mediaEstrellas}</span>
-                )}
-              </div>
+          {/* VALORACIONES GLOBALES (CON NOMBRE EN CLUB Y ANÓNIMAS EN RESTO DE EXLIBRIS) */}
+          <div className="border-t border-stone-100 pt-4 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Valoraciones de lectores</span>
+              </h3>
+              {mediaEstrellas && (
+                <span className="text-xs font-bold text-stone-700">★ {mediaEstrellas}</span>
+              )}
+            </div>
 
+            {currentUserId && (
               <form
                 onSubmit={guardarResena}
                 className="bg-stone-50 border border-stone-200 rounded-2xl p-3.5 space-y-2.5"
@@ -1043,7 +1067,7 @@ const solicitarPrestamoDesdeModal = async () => {
                   maxLength={500}
                   value={miComentario}
                   onChange={(e) => setMiComentario(e.target.value)}
-                  placeholder="¿Qué te ha parecido este libro? Comparte tu opinión con el club..."
+                  placeholder="Comparte tu opinión (aparecerá con tu alias en tus clubes y de forma anónima fuera de ellos)..."
                   className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600 resize-none"
                 />
 
@@ -1054,50 +1078,96 @@ const solicitarPrestamoDesdeModal = async () => {
                     className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                   >
                     <Send className="w-3 h-3" />
-                    <span>{guardandoResena ? 'Guardando...' : 'Publicar opinión'}</span>
+                    <span>{guardandoResena ? 'Guardando...' : 'Publicar valoración'}</span>
                   </button>
                 </div>
               </form>
+            )}
 
-              {cargandoResenas ? (
-                <p className="text-xs text-stone-400 text-center py-2">Cargando comentarios...</p>
-              ) : resenas.length === 0 ? (
-                <p className="text-xs text-stone-400 text-center py-2">
-                  Nadie ha reseñado todavía este título en el club. ¡Sé el primero!
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {resenas.map((r) => (
-                    <div
-                      key={r.id}
-                      className="bg-white border border-stone-200/80 rounded-xl p-3 space-y-1"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-stone-800">
-                          {r.usuario_id === currentUserId ? `${r.usuario_nombre} (Tú)` : r.usuario_nombre}
-                        </span>
-                        <div className="flex items-center gap-0.5">
-                          {[1, 2, 3, 4, 5].map((n) => (
-                            <Star
-                              key={n}
-                              className={`w-3 h-3 ${
-                                n <= r.puntuacion
-                                  ? 'fill-amber-400 text-amber-400'
-                                  : 'text-stone-200'
-                              }`}
-                            />
-                          ))}
+            {cargandoResenas ? (
+              <p className="text-xs text-stone-400 text-center py-2">Cargando valoraciones...</p>
+            ) : resenas.length === 0 ? (
+              <p className="text-xs text-stone-400 text-center py-2">
+                Nadie ha valorado todavía este título en Exlibris. ¡Sé el primero!
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {resenasDelClub.length > 0 && (
+                  <div className="space-y-2">
+                    {libro.clubNombre && resenasComunidad.length > 0 && (
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
+                        En {libro.clubNombre}
+                      </p>
+                    )}
+                    {resenasDelClub.map((r) => (
+                      <div
+                        key={r.id}
+                        className="bg-white border border-stone-200/80 rounded-xl p-3 space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-stone-800">
+                            {r.usuario_id === currentUserId
+                              ? `${r.usuario_nombre} (Tú)`
+                              : r.usuario_nombre}
+                          </span>
+                          <div className="flex items-center gap-0.5">
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <Star
+                                key={n}
+                                className={`w-3 h-3 ${
+                                  n <= r.puntuacion
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-stone-200'
+                                }`}
+                              />
+                            ))}
+                          </div>
                         </div>
+                        {r.comentario && (
+                          <p className="text-xs text-stone-600 leading-relaxed">{r.comentario}</p>
+                        )}
                       </div>
-                      {r.comentario && (
-                        <p className="text-xs text-stone-600 leading-relaxed">{r.comentario}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                    ))}
+                  </div>
+                )}
+
+                {resenasComunidad.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">
+                      Otros lectores de Exlibris (anónimo)
+                    </p>
+                    {resenasComunidad.map((r) => (
+                      <div
+                        key={r.id}
+                        className="bg-stone-50/70 border border-stone-200/70 rounded-xl p-3 space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-stone-600">
+                            Lector de Exlibris
+                          </span>
+                          <div className="flex items-center gap-0.5">
+                            {[1, 2, 3, 4, 5].map((n) => (
+                              <Star
+                                key={n}
+                                className={`w-3 h-3 ${
+                                  n <= r.puntuacion
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-stone-200'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        {r.comentario && (
+                          <p className="text-xs text-stone-600 leading-relaxed">{r.comentario}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {libro.esPropio && (
             <div className="space-y-4 border-t border-stone-100 pt-4">

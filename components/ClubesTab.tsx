@@ -164,7 +164,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
           supabase
             .from('resenas_libro')
             .select('isbn, puntuacion')
-            .eq('club_id', clubId)
             .in('isbn', isbns),
         ])
 
@@ -399,6 +398,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setLibroSeleccionado({
       ejemplarId: item.id,
       estado: item.estado,
+      propietarioId: item.propietario_id,
       propietarioNombre: item.propietario_nombre,
       esPropio: esMio,
       isbn: item.libros_catalogo.isbn,
@@ -484,7 +484,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
           <button
             type="button"
             onClick={() => setModoFormulario(modoFormulario === 'crear' ? 'ninguno' : 'crear')}
-            className="py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white font-medium rounded-xl text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+            className="py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white font-medium rounded-xl text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Crear club</span>
@@ -495,7 +495,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       {modoFormulario === 'crear' && (
         <form
           onSubmit={crearClub}
-          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-xs space-y-3"
+          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs space-y-3"
         >
           <label className="block text-xs font-semibold text-stone-700">
             Nombre del nuevo club de lectura
@@ -523,7 +523,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       {modoFormulario === 'unirse' && (
         <form
           onSubmit={unirseAClub}
-          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-xs space-y-3"
+          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs space-y-3"
         >
           <label className="block text-xs font-semibold text-stone-700">
             Código de invitación del club
@@ -759,7 +759,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                       {item.libros_catalogo?.premios && (
                         <span
                           title={item.libros_catalogo.premios}
-                          className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-xs"
+                          className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-2xs"
                         >
                           <Award className="w-2.5 h-2.5" />
                         </span>
@@ -768,11 +768,11 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                       {item.estado === 'disponible' ? (
                         <span
                           title="Disponible"
-                          className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white shadow-xs"
+                          className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white shadow-2xs"
                         />
                       ) : (
                         <span
-                          className={`absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-xs ${
+                          className={`absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-2xs ${
                             item.estado === 'prestado'
                               ? 'bg-blue-600/95 text-white'
                               : 'bg-amber-500/95 text-white'
@@ -783,7 +783,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                       )}
 
                       {item.media_estrellas && (
-                        <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-xs">
+                        <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-2xs">
                           <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
                           <span>{item.media_estrellas}</span>
                         </span>

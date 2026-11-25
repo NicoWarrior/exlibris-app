@@ -19,6 +19,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Star,
   Tag,
   UserCircle2,
   X,
@@ -31,6 +32,8 @@ interface EjemplarLocal {
   propietario_id: string
   codigo_postal: string
   municipio: string | null
+  resenas_count: number
+  media_estrellas: string | null
   libros_catalogo: {
     isbn: string
     titulo: string
@@ -122,14 +125,25 @@ export default function ExplorarLocalTab({
       }
 
       const isbns = Array.from(new Set(ejemplaresData.map((e) => e.isbn)))
-      const { data: catalogoData } = await supabase
-        .from('libros_catalogo')
-        .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
-        .in('isbn', isbns)
+      const [{ data: catalogoData }, { data: resenasData }] = await Promise.all([
+        supabase
+          .from('libros_catalogo')
+          .select('isbn, titulo, autor, portada_url, genero, sinopsis, premios')
+          .in('isbn', isbns),
+        supabase.from('resenas_libro').select('isbn, puntuacion').in('isbn', isbns),
+      ])
 
       const combinados: EjemplarLocal[] = ejemplaresData
         .map((ej) => {
           const vecino = vecinosData.find((v) => v.id === ej.propietario_id)
+          const resenasLibro = resenasData?.filter((r) => r.isbn === ej.isbn) || []
+          const media =
+            resenasLibro.length > 0
+              ? (
+                  resenasLibro.reduce((acc, r) => acc + r.puntuacion, 0) / resenasLibro.length
+                ).toFixed(1)
+              : null
+
           return {
             id: ej.id,
             isbn: ej.isbn,
@@ -137,6 +151,8 @@ export default function ExplorarLocalTab({
             propietario_id: ej.propietario_id,
             codigo_postal: cpLimpio,
             municipio: vecino?.ciudad || null,
+            resenas_count: resenasLibro.length,
+            media_estrellas: media,
             libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
               isbn: ej.isbn,
               titulo: `ISBN: ${ej.isbn}`,
@@ -268,6 +284,7 @@ export default function ExplorarLocalTab({
     setLibroSeleccionado({
       ejemplarId: item.id,
       estado: item.estado,
+      propietarioId: item.propietario_id,
       propietarioNombre: etiquetaVecino,
       esPropio: false,
       isbn: item.libros_catalogo.isbn,
@@ -318,7 +335,6 @@ export default function ExplorarLocalTab({
 
   return (
     <div className="space-y-4">
-      {/* Cabecera */}
       <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Explorar en tu Barrio</h1>
@@ -333,7 +349,6 @@ export default function ExplorarLocalTab({
         </span>
       </div>
 
-      {/* Buscador de Código Postal */}
       <form
         onSubmit={handleBuscarCp}
         className="bg-white p-3 rounded-2xl border border-stone-200 shadow-2xs flex items-center gap-2"
@@ -357,7 +372,6 @@ export default function ExplorarLocalTab({
         </button>
       </form>
 
-      {/* Aviso si aún no tiene CP en su perfil */}
       {!cpActual ? (
         <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-8 text-center space-y-3">
           <MapPin className="w-9 h-9 text-stone-300 mx-auto" />
@@ -428,7 +442,6 @@ export default function ExplorarLocalTab({
             />
           )}
 
-          {/* Filtro de texto, selector de vista y píldoras de género */}
           {librosZona.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -515,7 +528,6 @@ export default function ExplorarLocalTab({
             </div>
           )}
 
-          {/* Resultados */}
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
               Buscando ejemplares disponibles en CP {cpActual}...
@@ -547,7 +559,6 @@ export default function ExplorarLocalTab({
               </button>
             </div>
           ) : vistaZona === 'grid' ? (
-            /* VISTA CUADRÍCULA COMPACTA */
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 sm:gap-3">
               {librosFiltrados.map((item) => (
                 <div
@@ -565,15 +576,22 @@ export default function ExplorarLocalTab({
                     {item.libros_catalogo?.premios && (
                       <span
                         title={item.libros_catalogo.premios}
-                        className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-xs"
+                        className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-2xs"
                       >
                         <Award className="w-2.5 h-2.5" />
                       </span>
                     )}
 
-                    <span className="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-xs bg-sky-100/95 text-sky-900">
+                    <span className="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-2xs bg-sky-100/95 text-sky-900">
                       {item.codigo_postal}
                     </span>
+
+                    {item.media_estrellas && (
+                      <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-2xs">
+                        <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                        <span>{item.media_estrellas}</span>
+                      </span>
+                    )}
                   </div>
 
                   <div className="p-2 flex-1 flex flex-col justify-between gap-1.5">
@@ -630,7 +648,6 @@ export default function ExplorarLocalTab({
               ))}
             </div>
           ) : (
-            /* VISTA LISTA DETALLADA */
             <div className="space-y-2">
               {librosFiltrados.map((item) => {
                 const etiquetaVecino = item.municipio
@@ -668,6 +685,12 @@ export default function ExplorarLocalTab({
                           {item.libros_catalogo?.genero && (
                             <span className="text-[10px] font-medium bg-stone-100 text-stone-600 px-2 py-0.5 rounded-md truncate">
                               {item.libros_catalogo.genero}
+                            </span>
+                          )}
+                          {item.media_estrellas && (
+                            <span className="text-[10px] font-semibold text-amber-700 inline-flex items-center gap-0.5">
+                              <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                              {item.media_estrellas} ({item.resenas_count})
                             </span>
                           )}
                         </div>
@@ -723,7 +746,10 @@ export default function ExplorarLocalTab({
 
       <LibroModal
         libro={libroSeleccionado}
-        onClose={() => setLibroSeleccionado(null)}
+        onClose={() => {
+          setLibroSeleccionado(null)
+          if (cpActual) buscarEnCodigoPostal(cpActual)
+        }}
         onActualizado={() => cpActual && buscarEnCodigoPostal(cpActual)}
       />
     </div>

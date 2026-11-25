@@ -13,12 +13,15 @@ import {
   BookOpen,
   Camera,
   Check,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Image as ImageIcon,
   Loader2,
   MessageCircle,
   RotateCcw,
   Send,
+  Star,
   X,
   MapPin,
 } from 'lucide-react'
@@ -54,6 +57,11 @@ interface MensajeChat {
   leido?: boolean
 }
 
+interface MiResenaMap {
+  puntuacion: number
+  comentario: string
+}
+
 interface PrestamosTabProps {
   userId: string
   onCambioEstado: () => void
@@ -66,6 +74,14 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   const [procesandoId, setProcesandoId] = useState<string | null>(null)
   const [avisosEnviados, setAvisosEnviados] = useState<Record<string, boolean>>({})
   const [filtroVista, setFiltroVista] = useState<'activos' | 'historial'>('activos')
+
+  // Control de desplegables y valoraciones en Historial
+  const [historialExpandidoIds, setHistorialExpandidoIds] = useState<Record<string, boolean>>({})
+  const [resenaAbiertaId, setResenaAbiertaId] = useState<string | null>(null)
+  const [misResenas, setMisResenas] = useState<Record<string, MiResenaMap>>({})
+  const [puntuacionDraft, setPuntuacionDraft] = useState<number>(5)
+  const [comentarioDraft, setComentarioDraft] = useState<string>('')
+  const [guardandoResena, setGuardandoResena] = useState(false)
 
   const [subiendoFotoKey, setSubiendoFotoKey] = useState<string | null>(null)
   const [fotoAmpliada, setFotoAmpliada] = useState<{ url: string; titulo: string } | null>(null)
@@ -119,6 +135,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       { data: perfilesData },
       { data: clubesData },
       { data: noLeidosData },
+      { data: resenasUsuarioData },
     ] = await Promise.all([
       supabase.from('ejemplares').select('id, isbn').in('id', ejemplarIds),
       supabase.from('perfiles').select('id, nombre, nombre_usuario').in('id', otroUserIds),
@@ -131,7 +148,22 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         .in('prestamo_id', prestamoIds)
         .neq('remitente_id', userId)
         .eq('leido', false),
+      supabase
+        .from('resenas_libro')
+        .select('isbn, puntuacion, comentario')
+        .eq('usuario_id', userId),
     ])
+
+    if (resenasUsuarioData) {
+      const mapaResenas: Record<string, MiResenaMap> = {}
+      resenasUsuarioData.forEach((r) => {
+        mapaResenas[r.isbn] = {
+          puntuacion: r.puntuacion,
+          comentario: r.comentario || '',
+        }
+      })
+      setMisResenas(mapaResenas)
+    }
 
     const conteoSinLeerPorPrestamo = (noLeidosData || []).reduce<Record<string, number>>(
       (acc, m) => {
@@ -466,7 +498,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
       enviarNotificacionPush({
         destinatarioId: item.lector_id,
         titulo: 'Devolución confirmada',
-        cuerpo: `Se ha registrado la devolución de "${item.titulo}". ¡No olvides dejar tu reseña!`,
+        cuerpo: `Se ha registrado la devolución de "${item.titulo}". ¡No olvides dejar tu valoración en Historial!`,
         url: '/',
       })
       await cargarPrestamos()
@@ -512,6 +544,51 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     setAvisosEnviados((prev) => ({ ...prev, [item.id]: true }))
   }
 
+  const abrirPanelResena = (item: PrestamoItem) => {
+    if (resenaAbiertaId === item.id) {
+      setResenaAbiertaId(null)
+      return
+    }
+    const existente = misResenas[item.isbn]
+    setPuntuacionDraft(existente?.puntuacion || 5)
+    setComentarioDraft(existente?.comentario || '')
+    setChatAbiertoId(null)
+    setResenaAbiertaId(item.id)
+  }
+
+  const guardarValoracionHistorial = async (e: React.FormEvent, item: PrestamoItem) => {
+    e.preventDefault()
+    if (!item.isbn || guardandoResena) return
+    setGuardandoResena(true)
+
+    const comentarioLimpio = comentarioDraft.trim()
+    const { error } = await supabase.from('resenas_libro').upsert(
+      {
+        isbn: item.isbn,
+        club_id: item.club_id || null,
+        usuario_id: userId,
+        puntuacion: puntuacionDraft,
+        comentario: comentarioLimpio || null,
+      },
+      { onConflict: 'isbn,usuario_id' }
+    )
+
+    setGuardandoResena(false)
+    if (error) {
+      alert(`No se pudo guardar la valoración: ${error.message}`)
+    } else {
+      setMisResenas((prev) => ({
+        ...prev,
+        [item.isbn]: {
+          puntuacion: puntuacionDraft,
+          comentario: comentarioLimpio,
+        },
+      }))
+      setResenaAbiertaId(null)
+      onCambioEstadoRef.current()
+    }
+  }
+
   const esActivo = (estado: string) =>
     estado === 'solicitado' || estado === 'activo' || estado === 'en_curso'
 
@@ -538,6 +615,238 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
     }
   }
 
+  const formatearFechaCorta = (iso: string | null) => {
+    if (!iso) return ''
+    try {
+      return new Date(iso).toLocaleDateString('es-ES', {
+        day: 'numeric',
+        month: 'short',
+      })
+    } catch {
+      return ''
+    }
+  }
+
+  const renderBloqueChat = (item: PrestamoItem) => (
+    <div className="border-t border-stone-200 bg-stone-50 p-3.5 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-stone-500">
+          Chat con {item.otro_usuario_nombre}
+        </span>
+        <span className="text-[10px] text-emerald-700 font-medium">● En tiempo real</span>
+      </div>
+
+      <div
+        ref={chatContainerRef}
+        className="bg-white border border-stone-200 rounded-xl p-3 h-48 overflow-y-auto space-y-2.5"
+      >
+        {cargandoChat ? (
+          <div className="h-full flex items-center justify-center text-xs text-stone-400">
+            <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+            Cargando mensajes...
+          </div>
+        ) : mensajes.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center px-4">
+            <p className="text-xs text-stone-500 font-medium">
+              Aún no hay mensajes en este intercambio
+            </p>
+            <p className="text-[11px] text-stone-400 mt-1">
+              Escribe para acordar dónde quedar o comentar qué te está pareciendo el libro.
+            </p>
+          </div>
+        ) : (
+          mensajes.map((msg) => {
+            const esMio = msg.remitente_id === userId
+            return (
+              <div
+                key={msg.id}
+                className={`flex flex-col ${esMio ? 'items-end' : 'items-start'}`}
+              >
+                <div
+                  className={`max-w-[82%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${
+                    esMio
+                      ? 'bg-emerald-700 text-white rounded-br-xs'
+                      : 'bg-stone-100 text-stone-800 rounded-bl-xs'
+                  }`}
+                >
+                  <p className="whitespace-pre-line">{msg.contenido}</p>
+                </div>
+                <span className="text-[10px] text-stone-400 mt-0.5 px-1">
+                  {esMio ? 'Tú' : item.otro_usuario_nombre} · {formatearHora(msg.creado_en)}
+                </span>
+              </div>
+            )
+          })
+        )}
+      </div>
+
+      {esActivo(item.estado) && (
+        <>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setMostrarSelectorPunto((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-[11px] font-semibold cursor-pointer transition"
+            >
+              <MapPin className="w-3 h-3" />
+              <span>{mostrarSelectorPunto ? 'Cerrar mapa' : 'Proponer Punto Exlibris'}</span>
+            </button>
+          </div>
+
+          {mostrarSelectorPunto && (
+            <div>
+              <MapaPuntosExlibris
+                modoSelector
+                onClose={() => setMostrarSelectorPunto(false)}
+                onSeleccionarPunto={(punto: PuntoExlibris) => {
+                  const textoPunto = `📍 Propongo quedar en el Punto Exlibris: ${punto.nombre} (${punto.direccion}, CP ${punto.codigo_postal})${
+                    punto.horario_orientativo ? ` · Horario: ${punto.horario_orientativo}` : ''
+                  }`
+                  setNuevoMensaje(textoPunto)
+                  setMostrarSelectorPunto(false)
+                }}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      <form onSubmit={enviarMensaje} className="flex gap-2">
+        <input
+          type="text"
+          maxLength={1000}
+          value={nuevoMensaje}
+          onChange={(e) => setNuevoMensaje(e.target.value)}
+          placeholder="Escribe un mensaje..."
+          className="flex-1 px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+        />
+        <button
+          type="submit"
+          disabled={enviandoMensaje || !nuevoMensaje.trim()}
+          className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+        >
+          <Send className="w-3.5 h-3.5" />
+          <span>Enviar</span>
+        </button>
+      </form>
+    </div>
+  )
+
+  const renderActaFotos = (item: PrestamoItem) => (
+    <div className="border-t border-stone-100 bg-stone-50/70 px-3.5 py-2.5">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2 flex items-center gap-1.5">
+        <ImageIcon className="w-3 h-3" />
+        <span>Estado físico del ejemplar</span>
+      </p>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
+          {item.foto_entrega_url ? (
+            <button
+              type="button"
+              onClick={() =>
+                setFotoAmpliada({
+                  url: item.foto_entrega_url!,
+                  titulo: `Estado en la entrega · ${item.titulo}`,
+                })
+              }
+              className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
+            >
+              <img
+                src={item.foto_entrega_url}
+                alt="Estado entrega"
+                className="w-9 h-9 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
+              />
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-stone-800 truncate">Entrega</p>
+                <p className="text-[10px] text-emerald-700">Ver foto</p>
+              </div>
+            </button>
+          ) : (
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-stone-700">Entrega</p>
+              <p className="text-[10px] text-stone-400">Sin foto</p>
+            </div>
+          )}
+
+          {item.estado !== 'devuelto' && (
+            <label className="px-2 py-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
+              {subiendoFotoKey === `${item.id}-entrega` ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Camera className="w-3 h-3" />
+              )}
+              <span>{item.foto_entrega_url ? 'Cambiar' : 'Subir'}</span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                disabled={subiendoFotoKey !== null}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) subirFotoEstado(item.id, 'entrega', file)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
+          {item.foto_devolucion_url ? (
+            <button
+              type="button"
+              onClick={() =>
+                setFotoAmpliada({
+                  url: item.foto_devolucion_url!,
+                  titulo: `Estado en la devolución · ${item.titulo}`,
+                })
+              }
+              className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
+            >
+              <img
+                src={item.foto_devolucion_url}
+                alt="Estado devolución"
+                className="w-9 h-9 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
+              />
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-stone-800 truncate">Devolución</p>
+                <p className="text-[10px] text-emerald-700">Ver foto</p>
+              </div>
+            </button>
+          ) : (
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-stone-700">Devolución</p>
+              <p className="text-[10px] text-stone-400">Sin foto</p>
+            </div>
+          )}
+
+          <label className="px-2 py-1 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
+            {subiendoFotoKey === `${item.id}-devolucion` ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Camera className="w-3 h-3" />
+            )}
+            <span>{item.foto_devolucion_url ? 'Cambiar' : 'Subir'}</span>
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              disabled={subiendoFotoKey !== null}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) subirFotoEstado(item.id, 'devolucion', file)
+                e.target.value = ''
+              }}
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  )
+
   if (cargando) {
     return (
       <div className="py-12 text-center text-xs text-stone-500">
@@ -547,22 +856,24 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Préstamos</h1>
           <p className="text-xs text-stone-500">
-            Gestiona entregas, fotos de estado y coordina quedadas por chat
+            {filtroVista === 'activos'
+              ? 'Gestiona entregas, fotos y quedadas en curso'
+              : 'Movimientos cerrados, chats y valoraciones globales'}
           </p>
         </div>
 
-        <div className="flex bg-stone-200/70 p-1 rounded-xl text-xs font-semibold">
+        <div className="flex bg-stone-200/70 p-1 rounded-xl text-xs font-semibold shrink-0">
           <button
             type="button"
             onClick={() => setFiltroVista('activos')}
             className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               filtroVista === 'activos'
-                ? 'bg-white text-stone-900 shadow-xs'
+                ? 'bg-white text-stone-900 shadow-2xs'
                 : 'text-stone-600 hover:text-stone-900'
             }`}
           >
@@ -578,7 +889,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
             onClick={() => setFiltroVista('historial')}
             className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               filtroVista === 'historial'
-                ? 'bg-white text-stone-900 shadow-xs'
+                ? 'bg-white text-stone-900 shadow-2xs'
                 : 'text-stone-600 hover:text-stone-900'
             }`}
           >
@@ -601,10 +912,214 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
               : 'Aún no hay préstamos cerrados en tu historial'}
           </h2>
           <p className="text-xs text-stone-500 max-w-xs mx-auto">
-            Cuando pidas un libro en alguno de tus clubes o alguien te solicite uno de los tuyos, aparecerá aquí con su chat y acta fotográfica.
+            Cuando pidas un libro o alguien te solicite uno de los tuyos, aparecerá aquí con su chat y acta fotográfica.
           </p>
         </div>
+      ) : filtroVista === 'historial' ? (
+        /* VISTA COMPACTA MINIMIZADA PARA HISTORIAL */
+        <div className="space-y-2">
+          {prestamosFiltrados.map((item) => {
+            const chatAbierto = chatAbiertoId === item.id
+            const resenaAbierta = resenaAbiertaId === item.id
+            const detallesAbiertos = Boolean(historialExpandidoIds[item.id])
+            const resenaGuardada = item.isbn ? misResenas[item.isbn] : undefined
+            const puedeValorar = item.estado === 'devuelto' && Boolean(item.isbn)
+            const fechaCierre = formatearFechaCorta(
+              item.fecha_devolucion_real || item.fecha_entrega || item.fecha_solicitud
+            )
+
+            return (
+              <div
+                key={item.id}
+                className={`bg-white rounded-xl border overflow-hidden transition ${
+                  item.sin_leer_count > 0 && !chatAbierto
+                    ? 'border-emerald-400 ring-1 ring-emerald-200'
+                    : 'border-stone-200/90'
+                }`}
+              >
+                <div className="p-2.5 flex items-center gap-2.5">
+                  <div className="w-10 h-14 bg-stone-100 rounded-lg overflow-hidden shrink-0 border border-stone-200/80">
+                    <PortadaLibro
+                      src={item.portada_url}
+                      alt={item.titulo}
+                      isbn={item.isbn}
+                      compacto
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-semibold text-stone-900 text-xs truncate">
+                        {item.titulo}
+                      </h3>
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                          item.estado === 'devuelto'
+                            ? 'bg-stone-100 text-stone-700'
+                            : 'bg-red-50 text-red-700'
+                        }`}
+                      >
+                        {item.estado === 'devuelto'
+                          ? 'Devuelto'
+                          : item.estado === 'rechazado'
+                          ? 'Rechazado'
+                          : 'Cancelado'}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                      {item.es_propietario ? 'Prestado a' : 'De'}{' '}
+                      <strong className="text-stone-700 font-medium">
+                        {item.otro_usuario_nombre}
+                      </strong>
+                      {item.club_nombre ? ` · ${item.club_nombre}` : ' · Barrio'}
+                      {fechaCierre && ` · ${fechaCierre}`}
+                    </p>
+
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResenaAbiertaId(null)
+                          setChatAbiertoId(chatAbierto ? null : item.id)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
+                          chatAbierto
+                            ? 'bg-stone-900 text-white'
+                            : item.sin_leer_count > 0
+                            ? 'bg-emerald-50 text-emerald-900 border border-emerald-300'
+                            : 'bg-stone-100 hover:bg-stone-200 text-stone-700'
+                        }`}
+                      >
+                        <MessageCircle className="w-3 h-3" />
+                        <span>{chatAbierto ? 'Cerrar' : 'Chat'}</span>
+                        {!chatAbierto && item.sin_leer_count > 0 && (
+                          <span className="bg-red-600 text-white text-[9px] font-bold px-1 rounded-full">
+                            {item.sin_leer_count}
+                          </span>
+                        )}
+                      </button>
+
+                      {puedeValorar && (
+                        <button
+                          type="button"
+                          onClick={() => abrirPanelResena(item)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition cursor-pointer ${
+                            resenaAbierta
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : resenaGuardada
+                              ? 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                              : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
+                          }`}
+                        >
+                          <Star
+                            className={`w-3 h-3 ${
+                              resenaAbierta
+                                ? 'fill-white text-white'
+                                : resenaGuardada
+                                ? 'fill-amber-400 text-amber-400'
+                                : 'text-amber-500'
+                            }`}
+                          />
+                          <span>
+                            {resenaGuardada ? `Tu nota: ${resenaGuardada.puntuacion}/5` : 'Valorar'}
+                          </span>
+                        </button>
+                      )}
+
+                      {item.estado === 'devuelto' && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setHistorialExpandidoIds((prev) => ({
+                              ...prev,
+                              [item.id]: !prev[item.id],
+                            }))
+                          }
+                          className="ml-auto px-2 py-1 text-[11px] font-medium text-stone-500 hover:text-stone-800 rounded-lg hover:bg-stone-100 flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <span>Fotos</span>
+                          {detallesAbiertos ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {resenaAbierta && puedeValorar && (
+                  <form
+                    onSubmit={(e) => guardarValoracionHistorial(e, item)}
+                    className="border-t border-amber-100 bg-amber-50/50 p-3 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[11px] font-bold text-stone-800">
+                          Valora &ldquo;{item.titulo}&rdquo;
+                        </p>
+                        <p className="text-[10px] text-stone-500">
+                          Visible con tu nombre en tu club y de forma anónima en toda la comunidad.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {[1, 2, 3, 4, 5].map((estrella) => (
+                          <button
+                            key={estrella}
+                            type="button"
+                            onClick={() => setPuntuacionDraft(estrella)}
+                            className="p-0.5 cursor-pointer transition-transform hover:scale-110"
+                          >
+                            <Star
+                              className={`w-4 h-4 ${
+                                estrella <= puntuacionDraft
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-stone-300'
+                              }`}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={2}
+                      maxLength={500}
+                      value={comentarioDraft}
+                      onChange={(e) => setComentarioDraft(e.target.value)}
+                      placeholder="¿Lo recomiendas? Escribe una breve opinión para ayudar a otros lectores..."
+                      className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500 resize-none"
+                    />
+
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setResenaAbiertaId(null)}
+                        className="px-2.5 py-1 bg-white border border-stone-200 text-stone-600 rounded-lg text-[11px] font-medium cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={guardandoResena}
+                        className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+                      >
+                        {guardandoResena ? 'Guardando...' : 'Publicar valoración'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {detallesAbiertos && renderActaFotos(item)}
+                {chatAbierto && renderBloqueChat(item)}
+              </div>
+            )
+          })}
+        </div>
       ) : (
+        /* VISTA DETALLADA PARA PRÉSTAMOS EN CURSO */
         <div className="space-y-3.5">
           {prestamosFiltrados.map((item) => {
             const chatAbierto = chatAbiertoId === item.id
@@ -612,14 +1127,13 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
             const mostrarActaFotos =
               item.estado === 'activo' ||
               item.estado === 'en_curso' ||
-              item.estado === 'devuelto' ||
               Boolean(item.foto_entrega_url) ||
               Boolean(item.foto_devolucion_url)
 
             return (
               <div
                 key={item.id}
-                className={`bg-white rounded-2xl border shadow-xs overflow-hidden transition ${
+                className={`bg-white rounded-2xl border shadow-2xs overflow-hidden transition ${
                   item.sin_leer_count > 0 && !chatAbierto
                     ? 'border-emerald-400 ring-1 ring-emerald-200'
                     : 'border-stone-200'
@@ -661,22 +1175,10 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
                           item.estado === 'solicitado'
                             ? 'bg-amber-100 text-amber-800'
-                            : item.estado === 'activo' || item.estado === 'en_curso'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : item.estado === 'devuelto'
-                            ? 'bg-stone-100 text-stone-700'
-                            : 'bg-red-100 text-red-700'
+                            : 'bg-emerald-100 text-emerald-800'
                         }`}
                       >
-                        {item.estado === 'solicitado'
-                          ? 'Solicitado'
-                          : item.estado === 'activo' || item.estado === 'en_curso'
-                          ? 'En préstamo'
-                          : item.estado === 'devuelto'
-                          ? 'Devuelto'
-                          : item.estado === 'rechazado'
-                          ? 'Rechazado'
-                          : 'Cancelado'}
+                        {item.estado === 'solicitado' ? 'Solicitado' : 'En préstamo'}
                       </span>
                     </div>
 
@@ -706,7 +1208,7 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                         <MessageCircle className="w-3.5 h-3.5" />
                         <span>{chatAbierto ? 'Cerrar chat' : 'Chat quedada / novela'}</span>
                         {!chatAbierto && item.sin_leer_count > 0 && (
-                          <span className="ml-0.5 bg-red-600 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-xs">
+                          <span className="ml-0.5 bg-red-600 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center shadow-2xs">
                             {item.sin_leer_count}
                           </span>
                         )}
@@ -789,234 +1291,8 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
                   </div>
                 </div>
 
-                {mostrarActaFotos && (
-                  <div className="border-t border-stone-100 bg-stone-50/70 px-4 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400 mb-2 flex items-center gap-1.5">
-                      <ImageIcon className="w-3 h-3" />
-                      <span>Estado físico del ejemplar</span>
-                    </p>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
-                        {item.foto_entrega_url ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setFotoAmpliada({
-                                url: item.foto_entrega_url!,
-                                titulo: `Estado en la entrega · ${item.titulo}`,
-                              })
-                            }
-                            className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
-                          >
-                            <img
-                              src={item.foto_entrega_url}
-                              alt="Estado entrega"
-                              className="w-10 h-10 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
-                            />
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-semibold text-stone-800 truncate">
-                                Foto entrega
-                              </p>
-                              <p className="text-[10px] text-emerald-700">Ver ampliada</p>
-                            </div>
-                          </button>
-                        ) : (
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-semibold text-stone-700">
-                              Entrega
-                            </p>
-                            <p className="text-[10px] text-stone-400">Sin foto aún</p>
-                          </div>
-                        )}
-
-                        {item.estado !== 'devuelto' && (
-                          <label className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
-                            {subiendoFotoKey === `${item.id}-entrega` ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Camera className="w-3.5 h-3.5" />
-                            )}
-                            <span>{item.foto_entrega_url ? 'Cambiar' : 'Subir'}</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              capture="environment"
-                              className="hidden"
-                              disabled={subiendoFotoKey !== null}
-                              onChange={(e) => {
-                                const file = e.target.files?.[0]
-                                if (file) subirFotoEstado(item.id, 'entrega', file)
-                                e.target.value = ''
-                              }}
-                            />
-                          </label>
-                        )}
-                      </div>
-
-                      <div className="bg-white border border-stone-200 rounded-xl p-2 flex items-center justify-between gap-2">
-                        {item.foto_devolucion_url ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setFotoAmpliada({
-                                url: item.foto_devolucion_url!,
-                                titulo: `Estado en la devolución · ${item.titulo}`,
-                              })
-                            }
-                            className="flex items-center gap-2 text-left min-w-0 cursor-pointer group"
-                          >
-                            <img
-                              src={item.foto_devolucion_url}
-                              alt="Estado devolución"
-                              className="w-10 h-10 rounded-lg object-cover border border-stone-200 shrink-0 group-hover:opacity-90"
-                            />
-                            <div className="min-w-0">
-                              <p className="text-[11px] font-semibold text-stone-800 truncate">
-                                Foto devolución
-                              </p>
-                              <p className="text-[10px] text-emerald-700">Ver ampliada</p>
-                            </div>
-                          </button>
-                        ) : (
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-semibold text-stone-700">
-                              Devolución
-                            </p>
-                            <p className="text-[10px] text-stone-400">Sin foto aún</p>
-                          </div>
-                        )}
-
-                        <label className="px-2.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer">
-                          {subiendoFotoKey === `${item.id}-devolucion` ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Camera className="w-3.5 h-3.5" />
-                          )}
-                          <span>{item.foto_devolucion_url ? 'Cambiar' : 'Subir'}</span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            capture="environment"
-                            className="hidden"
-                            disabled={subiendoFotoKey !== null}
-                            onChange={(e) => {
-                              const file = e.target.files?.[0]
-                              if (file) subirFotoEstado(item.id, 'devolucion', file)
-                              e.target.value = ''
-                            }}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {chatAbierto && (
-                  <div className="border-t border-stone-200 bg-stone-50 p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-stone-500">
-                        Chat privado con {item.otro_usuario_nombre}
-                      </span>
-                      <span className="text-[10px] text-emerald-700 font-medium">
-                        ● En tiempo real
-                      </span>
-                    </div>
-
-                    <div
-                      ref={chatContainerRef}
-                      className="bg-white border border-stone-200 rounded-xl p-3 h-56 overflow-y-auto space-y-2.5"
-                    >
-                      {cargandoChat ? (
-                        <div className="h-full flex items-center justify-center text-xs text-stone-400">
-                          <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
-                          Cargando mensajes...
-                        </div>
-                      ) : mensajes.length === 0 ? (
-                        <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                          <p className="text-xs text-stone-500 font-medium">
-                            Aún no hay mensajes en este intercambio
-                          </p>
-                          <p className="text-[11px] text-stone-400 mt-1">
-                            Escribe para acordar dónde y cuándo quedar, o para comentar qué te está pareciendo el libro.
-                          </p>
-                        </div>
-                      ) : (
-                        mensajes.map((msg) => {
-                          const esMio = msg.remitente_id === userId
-                          return (
-                            <div
-                              key={msg.id}
-                              className={`flex flex-col ${
-                                esMio ? 'items-end' : 'items-start'
-                              }`}
-                            >
-                              <div
-                                className={`max-w-[82%] px-3 py-2 rounded-2xl text-xs leading-relaxed ${
-                                  esMio
-                                    ? 'bg-emerald-700 text-white rounded-br-xs'
-                                    : 'bg-stone-100 text-stone-800 rounded-bl-xs'
-                                }`}
-                              >
-                                <p className="whitespace-pre-line">{msg.contenido}</p>
-                              </div>
-                              <span className="text-[10px] text-stone-400 mt-0.5 px-1">
-                                {esMio ? 'Tú' : item.otro_usuario_nombre} ·{' '}
-                                {formatearHora(msg.creado_en)}
-                              </span>
-                            </div>
-                          )
-                        })
-                      )}
-                    </div>
-
-                    <div className="flex justify-end mb-2">
-                      <button
-                        type="button"
-                        onClick={() => setMostrarSelectorPunto((prev) => !prev)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer transition"
-                      >
-                        <MapPin className="w-3.5 h-3.5" />
-                        <span>{mostrarSelectorPunto ? 'Cerrar mapa' : 'Proponer Punto Exlibris'}</span>
-                      </button>
-                    </div>
-
-                    {mostrarSelectorPunto && (
-                      <div className="mb-3">
-                        <MapaPuntosExlibris
-                          modoSelector
-                          onClose={() => setMostrarSelectorPunto(false)}
-                          onSeleccionarPunto={(punto: PuntoExlibris) => {
-                            const textoPunto = `📍 Propongo quedar en el Punto Exlibris: ${punto.nombre} (${punto.direccion}, CP ${punto.codigo_postal})${
-                              punto.horario_orientativo ? ` · Horario: ${punto.horario_orientativo}` : ''
-                            }`
-                            setNuevoMensaje(textoPunto)
-                            setMostrarSelectorPunto(false)
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    <form onSubmit={enviarMensaje} className="flex gap-2">
-                      <input
-                        type="text"
-                        maxLength={1000}
-                        value={nuevoMensaje}
-                        onChange={(e) => setNuevoMensaje(e.target.value)}
-                        placeholder="Ej. ¿Quedamos mañana a las 19:00 en la plaza?"
-                        className="flex-1 px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
-                      />
-                      <button
-                        type="submit"
-                        disabled={enviandoMensaje || !nuevoMensaje.trim()}
-                        className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Enviar</span>
-                      </button>
-                    </form>
-                  </div>
-                )}
+                {mostrarActaFotos && renderActaFotos(item)}
+                {chatAbierto && renderBloqueChat(item)}
               </div>
             )
           })}
