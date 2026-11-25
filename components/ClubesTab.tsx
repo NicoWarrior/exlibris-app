@@ -7,6 +7,8 @@ import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
 import {
   Award,
+  Bookmark,
+  BookmarkCheck,
   Check,
   Copy,
   KeyRound,
@@ -74,6 +76,19 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
   const [procesando, setProcesando] = useState(false)
   const [copiado, setCopiado] = useState(false)
   const [solicitandoId, setSolicitandoId] = useState<string | null>(null)
+  const [deseosIsbns, setDeseosIsbns] = useState<Set<string>>(new Set())
+  const [guardandoDeseoId, setGuardandoDeseoId] = useState<string | null>(null)
+
+  const cargarMisDeseos = useCallback(async () => {
+    const { data } = await supabase
+      .from('lista_deseos')
+      .select('isbn')
+      .eq('usuario_id', userId)
+
+    if (data) {
+      setDeseosIsbns(new Set(data.map((d) => d.isbn)))
+    }
+  }, [supabase, userId])
 
   const cargarMisClubes = useCallback(async () => {
     setCargandoClubes(true)
@@ -208,7 +223,8 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
   useEffect(() => {
     cargarMisClubes()
-  }, [cargarMisClubes])
+    cargarMisDeseos()
+  }, [cargarMisClubes, cargarMisDeseos])
 
   useEffect(() => {
     if (clubActivo) {
@@ -291,6 +307,50 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setProcesando(false)
     await cargarMisClubes()
     setClubActivo(clubEncontrado)
+  }
+
+  const toggleDeseo = async (ejemplar: EjemplarClub) => {
+    if (guardandoDeseoId) return
+    setGuardandoDeseoId(ejemplar.id)
+    const yaGuardado = deseosIsbns.has(ejemplar.isbn)
+
+    if (yaGuardado) {
+      const { error } = await supabase
+        .from('lista_deseos')
+        .delete()
+        .eq('usuario_id', userId)
+        .eq('isbn', ejemplar.isbn)
+
+      if (!error) {
+        setDeseosIsbns((prev) => {
+          const copia = new Set(prev)
+          copia.delete(ejemplar.isbn)
+          return copia
+        })
+      }
+    } else {
+      const { error } = await supabase.from('lista_deseos').upsert(
+        {
+          usuario_id: userId,
+          ejemplar_id: ejemplar.id,
+          club_id: clubActivo?.id || null,
+          isbn: ejemplar.isbn,
+          titulo: ejemplar.libros_catalogo.titulo,
+          autor: ejemplar.libros_catalogo.autor,
+          portada_url: ejemplar.libros_catalogo.portada_url || '',
+          propietario_nombre: ejemplar.propietario_nombre,
+        },
+        { onConflict: 'usuario_id,isbn' }
+      )
+
+      if (!error) {
+        setDeseosIsbns((prev) => new Set(prev).add(ejemplar.isbn))
+      } else {
+        alert(`No se pudo guardar en Por leer: ${error.message}`)
+      }
+    }
+
+    setGuardandoDeseoId(null)
   }
 
   const solicitarPrestamo = async (ejemplar: EjemplarClub) => {
@@ -405,7 +465,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
 
   return (
     <div className="space-y-4">
-      {/* Cabecera */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-stone-900">Mis Clubes</h1>
@@ -433,7 +492,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       </div>
 
-      {/* Formularios Crear / Unirse */}
       {modoFormulario === 'crear' && (
         <form
           onSubmit={crearClub}
@@ -502,7 +560,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         </div>
       ) : (
         <>
-          {/* Selector de club + Código compacto */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
               {clubes.map((club) => (
@@ -541,7 +598,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             )}
           </div>
 
-          {/* Buscador + Vista Cuadrícula/Lista + Filtros */}
           {librosClub.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -593,7 +649,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                 </div>
               </div>
 
-              {/* Filtros rápidos de alcance/disponibilidad */}
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
                   {(
@@ -621,7 +676,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                   ))}
                 </div>
 
-                {/* Píldoras de género con libros presentes */}
                 {generosDisponibles.length > 2 && (
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
                     {generosDisponibles.map((gen) => {
@@ -660,7 +714,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
             </div>
           )}
 
-          {/* Listado / Cuadrícula de libros del club */}
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
               Cargando biblioteca del club...
@@ -687,7 +740,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               </button>
             </div>
           ) : vistaClub === 'grid' ? (
-            /* VISTA CUADRÍCULA COMPACTA */
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 sm:gap-3">
               {librosFiltrados.map((item) => {
                 const esMio = item.propietario_id === userId
@@ -754,19 +806,52 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                         </p>
                       </div>
 
-                      {!esMio && item.estado === 'disponible' && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            solicitarPrestamo(item)
-                          }}
-                          disabled={solicitandoId === item.id}
-                          className="w-full py-1 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
-                        >
-                          <Send className="w-2.5 h-2.5" />
-                          <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
-                        </button>
+                      {!esMio && (
+                        <div className="flex items-center gap-1 pt-0.5">
+                          {item.estado === 'disponible' ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                solicitarPrestamo(item)
+                              }}
+                              disabled={solicitandoId === item.id}
+                              className="flex-1 py-1 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                            >
+                              <Send className="w-2.5 h-2.5" />
+                              <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
+                            </button>
+                          ) : (
+                            <span className="flex-1 text-[10px] text-stone-400 truncate">
+                              En préstamo
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleDeseo(item)
+                            }}
+                            disabled={guardandoDeseoId === item.id}
+                            title={
+                              deseosIsbns.has(item.isbn)
+                                ? 'Quitar de mi lista Por leer'
+                                : 'Guardar en mi lista Por leer'
+                            }
+                            className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
+                              deseosIsbns.has(item.isbn)
+                                ? 'bg-amber-50 border-amber-300 text-amber-700'
+                                : 'bg-stone-50 border-stone-200 text-stone-500 hover:text-stone-800'
+                            }`}
+                          >
+                            {deseosIsbns.has(item.isbn) ? (
+                              <BookmarkCheck className="w-3 h-3" />
+                            ) : (
+                              <Bookmark className="w-3 h-3" />
+                            )}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -774,7 +859,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
               })}
             </div>
           ) : (
-            /* VISTA LISTA DETALLADA */
             <div className="space-y-2">
               {librosFiltrados.map((item) => {
                 const esMio = item.propietario_id === userId
@@ -836,19 +920,48 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
                           )}
                         </div>
 
-                        {!esMio && item.estado === 'disponible' ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              solicitarPrestamo(item)
-                            }}
-                            disabled={solicitandoId === item.id}
-                            className="shrink-0 py-1 px-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer"
-                          >
-                            <Send className="w-2.5 h-2.5" />
-                            <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
-                          </button>
+                        {!esMio ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {item.estado === 'disponible' && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  solicitarPrestamo(item)
+                                }}
+                                disabled={solicitandoId === item.id}
+                                className="py-1 px-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                              >
+                                <Send className="w-2.5 h-2.5" />
+                                <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDeseo(item)
+                              }}
+                              disabled={guardandoDeseoId === item.id}
+                              title={
+                                deseosIsbns.has(item.isbn)
+                                  ? 'Quitar de mi lista Por leer'
+                                  : 'Guardar en mi lista Por leer'
+                              }
+                              className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                deseosIsbns.has(item.isbn)
+                                  ? 'bg-amber-50 border-amber-300 text-amber-700'
+                                  : 'bg-stone-50 border-stone-200 text-stone-500 hover:text-stone-800'
+                              }`}
+                            >
+                              {deseosIsbns.has(item.isbn) ? (
+                                <BookmarkCheck className="w-3.5 h-3.5" />
+                              ) : (
+                                <Bookmark className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
                         ) : (
                           <span className="shrink-0 text-[10px] text-emerald-700 font-medium flex items-center gap-0.5">
                             <MessageSquare className="w-3 h-3" />
