@@ -549,14 +549,95 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       )}
 
       {clubes.length === 0 ? (
-        <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
-          <Users className="w-10 h-10 text-stone-300 mx-auto mb-3" />
-          <h2 className="font-semibold text-stone-800 mb-1 text-sm">
-            Aún no perteneces a ningún club
-          </h2>
-          <p className="text-xs text-stone-500 max-w-xs mx-auto">
-            Crea un club privado y comparte el código con tus amigos, o únete usando un código que te hayan pasado.
-          </p>
+        <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xs">
+          <div className="text-center max-w-sm mx-auto space-y-2">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
+              <Users className="w-3.5 h-3.5" />
+              <span>Vista previa de un club</span>
+            </span>
+            <h2 className="font-bold text-stone-900 text-base">
+              Comparte estantería con tu grupo
+            </h2>
+            <p className="text-xs text-stone-500 leading-relaxed">
+              Crea un club privado para tus amigos, familia o compañeros y pide prestados sus libros con un toque.
+            </p>
+          </div>
+
+          {/* Tarjetas de ejemplo (desaparecen al crear o unirte a un club) */}
+          <div className="grid grid-cols-3 gap-2.5 sm:gap-3 max-w-md mx-auto select-none pointer-events-none">
+            {[
+              {
+                titulo: 'El infinito en un junco',
+                dueno: 'De Ane',
+                nota: '4.9',
+                color: 'from-stone-800 to-stone-950',
+              },
+              {
+                titulo: 'Cien años de soledad',
+                dueno: 'De Mikel',
+                nota: '4.8',
+                color: 'from-emerald-900 to-stone-950',
+              },
+              {
+                titulo: 'Dune',
+                dueno: 'De Jabi',
+                nota: '4.7',
+                color: 'from-amber-900 to-stone-950',
+              },
+            ].map((ejemplo) => (
+              <div
+                key={ejemplo.titulo}
+                className="bg-stone-50 rounded-xl border border-dashed border-stone-300 overflow-hidden opacity-75 flex flex-col"
+              >
+                <div
+                  className={`aspect-[2/3] bg-gradient-to-br ${ejemplo.color} p-2.5 flex flex-col justify-between relative text-white`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[9px] font-bold uppercase tracking-wider bg-white/20 px-1.5 py-0.5 rounded">
+                      Ejemplo
+                    </span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-white/80" />
+                  </div>
+                  <div>
+                    <p className="font-serif font-bold text-[11px] leading-tight line-clamp-3">
+                      {ejemplo.titulo}
+                    </p>
+                    <p className="text-[9px] text-amber-300 font-semibold mt-1">
+                      ★ {ejemplo.nota}
+                    </p>
+                  </div>
+                </div>
+                <div className="p-2 bg-white space-y-1">
+                  <p className="font-semibold text-stone-800 text-[10px] truncate">
+                    {ejemplo.titulo}
+                  </p>
+                  <p className="text-[9px] text-stone-500 truncate">{ejemplo.dueno}</p>
+                  <div className="py-1 bg-emerald-700/90 text-white rounded-md text-[9px] font-semibold text-center">
+                    Pedir
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => setModoFormulario('crear')}
+              className="py-2.5 px-4 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 shadow-2xs transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Crear mi primer club</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setModoFormulario('unirse')}
+              className="py-2.5 px-4 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 text-xs font-semibold rounded-xl inline-flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>Tengo un código</span>
+            </button>
+          </div>
         </div>
       ) : (
         <>

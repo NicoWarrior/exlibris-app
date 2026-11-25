@@ -11,7 +11,6 @@ import {
   Award,
   Bookmark,
   BookmarkCheck,
-  BookOpen,
   LayoutGrid,
   List,
   MapPin,
@@ -45,6 +44,12 @@ interface EjemplarLocal {
   }
 }
 
+interface ZonaCercana {
+  cp: string
+  ciudad: string | null
+  cantidad: number
+}
+
 interface ExplorarLocalTabProps {
   userId: string
   onAbrirPerfil: () => void
@@ -60,6 +65,7 @@ export default function ExplorarLocalTab({
   const [cpActual, setCpActual] = useState<string>('')
   const [cpInput, setCpInput] = useState<string>('')
   const [librosZona, setLibrosZona] = useState<EjemplarLocal[]>([])
+  const [zonasCercanas, setZonasCercanas] = useState<ZonaCercana[]>([])
   const [vistaZona, setVistaZona] = useState<'grid' | 'lista'>('grid')
   const [busqueda, setBusqueda] = useState('')
   const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
@@ -84,17 +90,71 @@ export default function ExplorarLocalTab({
     }
   }, [supabase, userId])
 
+  const buscarZonasCercanas = useCallback(
+    async (cpExacto: string) => {
+      const prefijo = cpExacto.slice(0, 3)
+      const { data: vecinosCercanos } = await supabase
+        .from('perfiles')
+        .select('id, codigo_postal, ciudad')
+        .like('codigo_postal', `${prefijo}%`)
+        .neq('codigo_postal', cpExacto)
+        .eq('busqueda_local_activa', true)
+        .neq('id', userId)
+
+      if (!vecinosCercanos || vecinosCercanos.length === 0) {
+        setZonasCercanas([])
+        return
+      }
+
+      const idsCercanos = vecinosCercanos.map((v) => v.id)
+      const { data: ejemplaresCercanos } = await supabase
+        .from('ejemplares')
+        .select('propietario_id')
+        .in('propietario_id', idsCercanos)
+        .eq('visible_local', true)
+        .eq('estado', 'disponible')
+
+      if (!ejemplaresCercanos || ejemplaresCercanos.length === 0) {
+        setZonasCercanas([])
+        return
+      }
+
+      const mapaPorCp = new Map<string, ZonaCercana>()
+      ejemplaresCercanos.forEach((ej) => {
+        const vecino = vecinosCercanos.find((v) => v.id === ej.propietario_id)
+        if (!vecino?.codigo_postal) return
+        const actual = mapaPorCp.get(vecino.codigo_postal)
+        if (actual) {
+          actual.cantidad += 1
+        } else {
+          mapaPorCp.set(vecino.codigo_postal, {
+            cp: vecino.codigo_postal,
+            ciudad: vecino.ciudad || null,
+            cantidad: 1,
+          })
+        }
+      })
+
+      setZonasCercanas(
+        Array.from(mapaPorCp.values()).sort((a, b) => b.cantidad - a.cantidad)
+      )
+    },
+    [supabase, userId]
+  )
+
   const buscarEnCodigoPostal = useCallback(
     async (cp: string) => {
       const cpLimpio = cp.replace(/\D/g, '').slice(0, 5)
       if (cpLimpio.length !== 5) {
         setLibrosZona([])
+        setZonasCercanas([])
         return
       }
 
       setCargandoLibros(true)
       setCpActual(cpLimpio)
       setGeneroFiltro('Todos')
+      setZonasCercanas([])
 
       const { data: vecinosData } = await supabase
         .from('perfiles')
@@ -105,6 +165,7 @@ export default function ExplorarLocalTab({
 
       if (!vecinosData || vecinosData.length === 0) {
         setLibrosZona([])
+        await buscarZonasCercanas(cpLimpio)
         setCargandoLibros(false)
         return
       }
@@ -120,6 +181,7 @@ export default function ExplorarLocalTab({
 
       if (!ejemplaresData || ejemplaresData.length === 0) {
         setLibrosZona([])
+        await buscarZonasCercanas(cpLimpio)
         setCargandoLibros(false)
         return
       }
@@ -173,7 +235,7 @@ export default function ExplorarLocalTab({
       setLibrosZona(combinados)
       setCargandoLibros(false)
     },
-    [supabase, userId]
+    [supabase, userId, buscarZonasCercanas]
   )
 
   useEffect(() => {
@@ -533,14 +595,103 @@ export default function ExplorarLocalTab({
               Buscando ejemplares disponibles en CP {cpActual}...
             </div>
           ) : librosZona.length === 0 ? (
-            <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center space-y-2">
-              <BookOpen className="w-8 h-8 text-stone-300 mx-auto" />
-              <p className="text-xs font-semibold text-stone-700">
-                Aún no hay libros compartidos de forma anónima en el CP {cpActual}
-              </p>
-              <p className="text-[11px] text-stone-500 max-w-xs mx-auto">
-                Prueba con un código postal colindante o activa tus propios libros desde tu Estantería para estrenar la zona.
-              </p>
+            <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xs">
+              <div className="text-center max-w-sm mx-auto space-y-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-sky-800 bg-sky-50 border border-sky-200 px-3 py-1 rounded-full">
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span>CP {cpActual} · Vista previa del barrio</span>
+                </span>
+                <h2 className="font-bold text-stone-900 text-base">
+                  Aún no hay libros activos en el CP {cpActual}
+                </h2>
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Así aparecerán los ejemplares anónimos de tus vecinos. Puedes explorar un código postal cercano o estrenar esta zona activando alguno de tus libros desde Estantería.
+                </p>
+              </div>
+
+              {zonasCercanas.length > 0 && (
+                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 space-y-2 max-w-md mx-auto">
+                  <p className="text-[11px] font-semibold text-emerald-900 text-center">
+                    Hay libros disponibles en códigos postales cercanos:
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-1.5">
+                    {zonasCercanas.map((z) => (
+                      <button
+                        key={z.cp}
+                        type="button"
+                        onClick={() => {
+                          setCpInput(z.cp)
+                          buscarEnCodigoPostal(z.cp)
+                        }}
+                        className="px-3 py-1.5 bg-white hover:bg-emerald-700 hover:text-white text-emerald-900 border border-emerald-300 rounded-lg text-[11px] font-semibold transition cursor-pointer"
+                      >
+                        CP {z.cp}
+                        {z.ciudad ? ` (${z.ciudad})` : ''} · {z.cantidad}{' '}
+                        {z.cantidad === 1 ? 'libro' : 'libros'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Tarjetas de ejemplo (desaparecen al haber libros reales en el CP) */}
+              <div className="grid grid-cols-3 gap-2.5 sm:gap-3 max-w-md mx-auto select-none pointer-events-none">
+                {[
+                  {
+                    titulo: 'Los detectives salvajes',
+                    autor: 'Roberto Bolaño',
+                    cp: cpActual,
+                    color: 'from-sky-900 to-stone-950',
+                  },
+                  {
+                    titulo: 'Canto yo y la montaña baila',
+                    autor: 'Irene Solà',
+                    cp: cpActual,
+                    color: 'from-emerald-900 to-stone-950',
+                  },
+                  {
+                    titulo: 'Ficciones',
+                    autor: 'Jorge Luis Borges',
+                    cp: cpActual,
+                    color: 'from-stone-800 to-stone-950',
+                  },
+                ].map((ejemplo) => (
+                  <div
+                    key={ejemplo.titulo}
+                    className="bg-stone-50 rounded-xl border border-dashed border-stone-300 overflow-hidden opacity-75 flex flex-col"
+                  >
+                    <div
+                      className={`aspect-[2/3] bg-gradient-to-br ${ejemplo.color} p-2.5 flex flex-col justify-between relative text-white`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[9px] font-bold uppercase tracking-wider bg-white/20 px-1.5 py-0.5 rounded">
+                          Ejemplo
+                        </span>
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-900">
+                          {ejemplo.cp}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="font-serif font-bold text-[11px] leading-tight line-clamp-3">
+                          {ejemplo.titulo}
+                        </p>
+                        <p className="text-[9px] text-white/75 mt-1 truncate">
+                          {ejemplo.autor}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="p-2 bg-white space-y-1">
+                      <p className="font-semibold text-stone-800 text-[10px] truncate">
+                        {ejemplo.titulo}
+                      </p>
+                      <p className="text-[9px] text-stone-400 truncate">Vecino anónimo</p>
+                      <div className="py-1 bg-emerald-700/90 text-white rounded-md text-[9px] font-semibold text-center">
+                        Pedir
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : librosFiltrados.length === 0 ? (
             <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center">
