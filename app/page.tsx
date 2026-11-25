@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
-import { activarNotificacionesPush } from '@/utils/notificaciones'
+import { activarNotificacionesPush, enviarNotificacionPush } from '@/utils/notificaciones'
 import IsbnScanner from '@/components/IsbnScanner'
 import ClubesTab from '@/components/ClubesTab'
 import ExplorarLocalTab from '@/components/ExplorarLocalTab'
@@ -16,6 +16,7 @@ import {
   Award,
   Bell,
   BellRing,
+  Bookmark,
   BookOpen,
   LayoutGrid,
   List,
@@ -24,6 +25,8 @@ import {
   Plus,
   ScanBarcode,
   Search,
+  Send,
+  Trash2,
   UserCircle2,
   Users,
   X,
@@ -44,6 +47,19 @@ interface LibroEstanteria {
   }
 }
 
+interface LibroDeseo {
+  id: string
+  ejemplar_id: string | null
+  club_id: string | null
+  isbn: string
+  titulo: string
+  autor: string
+  portada_url: string
+  propietario_nombre: string | null
+  propietario_id?: string | null
+  estado_actual?: string | null
+}
+
 export default function Home() {
   const [user, setUser] = useState<any>(null)
   const [aliasUsuario, setAliasUsuario] = useState<string>('')
@@ -56,6 +72,10 @@ export default function Home() {
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
   const [pushActivo, setPushActivo] = useState(false)
   const [activandoPush, setActivandoPush] = useState(false)
+
+  const [subTabEstanteria, setSubTabEstanteria] = useState<'propios' | 'deseos'>('propios')
+  const [listaDeseos, setListaDeseos] = useState<LibroDeseo[]>([])
+  const [pidiendoDeseoId, setPidiendoDeseoId] = useState<string | null>(null)
 
   // Estados de visualización y filtrado de Mi Estantería
   const [vistaEstanteria, setVistaEstanteria] = useState<'grid' | 'lista'>('grid')
@@ -160,9 +180,82 @@ export default function Home() {
       }
 
       setNotificacionesPrestamosCount((solicitudesPendientes || 0) + mensajesSinLeer)
+
+      const { data: deseosData } = await supabase
+        .from('lista_deseos')
+        .select('id, ejemplar_id, club_id, isbn, titulo, autor, portada_url, propietario_nombre')
+        .eq('usuario_id', uid)
+        .order('creado_en', { ascending: false })
+
+      if (deseosData && deseosData.length > 0) {
+        const ejIds = deseosData
+          .map((d) => d.ejemplar_id)
+          .filter((id): id is string => Boolean(id))
+
+        const { data: ejemplaresActuales } =
+          ejIds.length > 0
+            ? await supabase
+                .from('ejemplares')
+                .select('id, estado, propietario_id')
+                .in('id', ejIds)
+            : { data: [] }
+
+        setListaDeseos(
+          deseosData.map((d) => {
+            const ej = ejemplaresActuales?.find((e) => e.id === d.ejemplar_id)
+            return {
+              ...d,
+              propietario_id: ej?.propietario_id || null,
+              estado_actual: ej?.estado || null,
+            }
+          })
+        )
+      } else {
+        setListaDeseos([])
+      }
     },
     [supabase]
   )
+
+  const eliminarDeseo = async (deseoId: string) => {
+    const { error } = await supabase.from('lista_deseos').delete().eq('id', deseoId)
+    if (!error) {
+      setListaDeseos((prev) => prev.filter((d) => d.id !== deseoId))
+    }
+  }
+
+  const pedirDesdeDeseos = async (deseo: LibroDeseo) => {
+    if (!user || !deseo.ejemplar_id || !deseo.propietario_id || pidiendoDeseoId) return
+    setPidiendoDeseoId(deseo.id)
+
+    const { error } = await supabase.from('prestamos').insert({
+      ejemplar_id: deseo.ejemplar_id,
+      propietario_id: deseo.propietario_id,
+      lector_id: user.id,
+      club_id: deseo.club_id,
+      estado: 'solicitado',
+    })
+
+    if (error) {
+      alert(`No se pudo solicitar el préstamo: ${error.message}`)
+      setPidiendoDeseoId(null)
+      return
+    }
+
+    await supabase.from('lista_deseos').delete().eq('id', deseo.id)
+    setListaDeseos((prev) => prev.filter((d) => d.id !== deseo.id))
+    setPidiendoDeseoId(null)
+
+    enviarNotificacionPush({
+      destinatarioId: deseo.propietario_id,
+      titulo: 'Nueva solicitud de préstamo',
+      cuerpo: `Te han pedido prestado "${deseo.titulo}"`,
+      url: '/',
+    })
+
+    await cargarDatos(user.id)
+    alert(`Solicitud enviada a ${deseo.propietario_nombre || 'su propietario'}.`)
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
@@ -268,6 +361,7 @@ export default function Home() {
     await supabase.auth.signOut()
     setUser(null)
     setMisLibros([])
+    setListaDeseos([])
   }
 
   const abrirDetalleLibro = (item: LibroEstanteria) => {
@@ -402,7 +496,118 @@ export default function Home() {
               </button>
             </div>
 
-            {misLibros.length === 0 ? (
+            {/* Selector Mis libros vs Lista Por leer */}
+            <div className="grid grid-cols-2 gap-1.5 bg-stone-200/70 p-1 rounded-xl text-xs font-semibold mb-4">
+              <button
+                type="button"
+                onClick={() => setSubTabEstanteria('propios')}
+                className={`py-1.5 rounded-lg transition cursor-pointer ${
+                  subTabEstanteria === 'propios'
+                    ? 'bg-white text-stone-900 shadow-2xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                Mis libros ({misLibros.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTabEstanteria('deseos')}
+                className={`py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  subTabEstanteria === 'deseos'
+                    ? 'bg-white text-stone-900 shadow-2xs'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Bookmark className="w-3.5 h-3.5 text-amber-600" />
+                <span>Por leer ({listaDeseos.length})</span>
+              </button>
+            </div>
+
+            {subTabEstanteria === 'deseos' ? (
+              listaDeseos.length === 0 ? (
+                <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
+                  <Bookmark className="w-10 h-10 text-stone-300 mx-auto mb-3" />
+                  <h2 className="font-semibold text-stone-800 mb-1 text-sm">
+                    Tu lista Por leer está vacía
+                  </h2>
+                  <p className="text-xs text-stone-500 max-w-xs mx-auto">
+                    Cuando veas un libro interesante en tus clubes, pulsa el icono de marcapáginas para guardarlo aquí y pedirlo cuando vayas a leerlo.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {listaDeseos.map((deseo) => {
+                    const disponibleAhora = deseo.estado_actual === 'disponible'
+                    return (
+                      <div
+                        key={deseo.id}
+                        className="bg-white rounded-xl border border-stone-200 p-3 flex items-center gap-3"
+                      >
+                        <div className="w-11 h-16 rounded-lg overflow-hidden bg-stone-100 shrink-0">
+                          <PortadaLibro
+                            src={deseo.portada_url}
+                            alt={deseo.titulo}
+                            isbn={deseo.isbn}
+                          />
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-stone-900 text-xs line-clamp-1">
+                            {deseo.titulo}
+                          </h3>
+                          <p className="text-[11px] text-stone-500 truncate mt-0.5">
+                            {deseo.autor}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                            {deseo.propietario_nombre && (
+                              <span className="text-[10px] text-stone-500">
+                                De{' '}
+                                <strong className="text-stone-700">
+                                  {deseo.propietario_nombre}
+                                </strong>
+                              </span>
+                            )}
+                            {deseo.estado_actual && (
+                              <span
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                  disponibleAhora
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {disponibleAhora ? 'Disponible ahora' : 'Prestado ahora'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {disponibleAhora && deseo.ejemplar_id && deseo.propietario_id && (
+                            <button
+                              type="button"
+                              onClick={() => pedirDesdeDeseos(deseo)}
+                              disabled={pidiendoDeseoId === deseo.id}
+                              className="py-1.5 px-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                            >
+                              <Send className="w-3 h-3" />
+                              <span>{pidiendoDeseoId === deseo.id ? 'Pidiendo...' : 'Pedir'}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => eliminarDeseo(deseo.id)}
+                            title="Quitar de Por leer"
+                            className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            ) : misLibros.length === 0 ? (
               <div className="bg-white border border-dashed border-stone-300 rounded-2xl p-10 text-center">
                 <BookOpen className="w-10 h-10 text-stone-300 mx-auto mb-3" />
                 <h2 className="font-semibold text-stone-800 mb-1 text-sm">Tu estantería está vacía</h2>
