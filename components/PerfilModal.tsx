@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
-import { Check, MapPin, ShieldCheck, User, X } from 'lucide-react'
+import { AlertTriangle, Check, MapPin, ShieldCheck, Trash2, User, X } from 'lucide-react'
 
 interface PerfilModalProps {
   isOpen: boolean
@@ -28,6 +28,10 @@ export default function PerfilModal({
   const [cargando, setCargando] = useState(false)
   const [guardando, setGuardando] = useState(false)
 
+  const [mostrarBorrarCuenta, setMostrarBorrarCuenta] = useState(false)
+  const [textoConfirmacion, setTextoConfirmacion] = useState('')
+  const [eliminandoCuenta, setEliminandoCuenta] = useState(false)
+
   useEffect(() => {
     if (!isOpen || !userId) return
 
@@ -41,6 +45,8 @@ export default function PerfilModal({
 
       setAlias(data?.nombre || data?.nombre_usuario || defaultName)
       setCodigoPostal(data?.codigo_postal || '')
+      setMostrarBorrarCuenta(false)
+      setTextoConfirmacion('')
       setCargando(false)
     }
 
@@ -81,16 +87,38 @@ export default function PerfilModal({
     }
   }
 
+  const handleEliminarCuenta = async () => {
+    if (textoConfirmacion.trim().toUpperCase() !== 'ELIMINAR' || eliminandoCuenta) return
+    setEliminandoCuenta(true)
+
+    try {
+      const res = await fetch('/api/eliminar-cuenta', { method: 'DELETE' })
+      const data = await res.json()
+
+      if (!res.ok) {
+        alert(data.error || 'No se pudo eliminar la cuenta.')
+        setEliminandoCuenta(false)
+        return
+      }
+
+      await supabase.auth.signOut()
+      window.location.href = '/'
+    } catch {
+      alert('Error de conexión al intentar eliminar la cuenta.')
+      setEliminandoCuenta(false)
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-xl border border-stone-200 overflow-hidden"
+        className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-stone-100 px-5 py-3.5 flex items-center justify-between">
+        <div className="border-b border-stone-100 px-5 py-3.5 flex items-center justify-between sticky top-0 bg-white z-10">
           <span className="text-xs font-bold text-stone-700 uppercase tracking-wider">
             Mi Perfil y Barrio
           </span>
@@ -157,7 +185,7 @@ export default function PerfilModal({
                 </button>
               </div>
 
-              <div className="pt-3 border-t border-stone-100 flex items-center justify-center">
+              <div className="pt-3 border-t border-stone-100 flex flex-col items-center gap-3">
                 <Link
                   href="/privacidad"
                   onClick={onClose}
@@ -166,6 +194,58 @@ export default function PerfilModal({
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>Términos de Uso y Política de Privacidad</span>
                 </Link>
+
+                {!mostrarBorrarCuenta ? (
+                  <button
+                    type="button"
+                    onClick={() => setMostrarBorrarCuenta(true)}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Eliminar mi cuenta y todos mis datos</span>
+                  </button>
+                ) : (
+                  <div className="w-full bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-2.5 text-left">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-red-900">
+                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                      <span>¿Eliminar definitivamente tu cuenta?</span>
+                    </div>
+                    <p className="text-[11px] text-red-800 leading-relaxed">
+                      Se borrarán de forma permanente tu perfil, tus libros catalogados, tu lista «¡Me lo apunto!», tus clubes creados y tu acceso. Esta acción no se puede deshacer.
+                    </p>
+                    <input
+                      type="text"
+                      value={textoConfirmacion}
+                      onChange={(e) => setTextoConfirmacion(e.target.value)}
+                      placeholder="Escribe ELIMINAR para confirmar"
+                      className="w-full px-3 py-1.5 bg-white border border-red-300 rounded-lg text-xs text-stone-900 placeholder:text-red-300 focus:outline-none focus:border-red-600"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMostrarBorrarCuenta(false)
+                          setTextoConfirmacion('')
+                        }}
+                        disabled={eliminandoCuenta}
+                        className="px-3 py-1.5 text-xs font-medium text-stone-600 hover:text-stone-900 cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleEliminarCuenta}
+                        disabled={
+                          textoConfirmacion.trim().toUpperCase() !== 'ELIMINAR' ||
+                          eliminandoCuenta
+                        }
+                        className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white rounded-lg text-xs font-semibold cursor-pointer transition"
+                      >
+                        {eliminandoCuenta ? 'Eliminando...' : 'Borrar cuenta para siempre'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}
