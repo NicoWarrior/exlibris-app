@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode'
 import { createClient } from '@/utils/supabase/client'
-import { GENEROS_EXLIBRIS, normalizarGenero } from '@/utils/generos'
+import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import {
   Camera,
   Check,
   Flashlight,
   Keyboard,
   Loader2,
+  PlusCircle,
+  RefreshCw,
   ScanBarcode,
   ZoomIn,
   X,
@@ -21,13 +23,14 @@ interface IsbnScannerProps {
   onBookAdded: () => void
 }
 
-interface BorradorManual {
+interface FichaLibroPrevia {
   isbn: string
   titulo: string
   autor: string
   portadaUrl: string
   genero: string
   sinopsis: string | null
+  encontradoEnCatalogo: boolean
 }
 
 function limpiarHtml(texto?: string | null): string | null {
@@ -46,7 +49,9 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
   const [soportaLinterna, setSoportaLinterna] = useState(false)
   const [zoomActivo, setZoomActivo] = useState(false)
   const [soportaZoom, setSoportaZoom] = useState(false)
-  const [borradorManual, setBorradorManual] = useState<BorradorManual | null>(null)
+  const [camarasTraseras, setCamarasTraseras] = useState<{ id: string; label: string }[]>([])
+  const [indiceCamara, setIndiceCamara] = useState(0)
+  const [fichaPrevia, setFichaPrevia] = useState<FichaLibroPrevia | null>(null)
 
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const videoTrackRef = useRef<MediaStreamTrack | null>(null)
@@ -56,6 +61,11 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     const track = videoTrackRef.current
     if (track) {
       try {
+        if (linternaActiva) {
+          await track.applyConstraints({
+            advanced: [{ torch: false } as MediaTrackConstraintSet],
+          })
+        }
         track.stop()
       } catch {
         // Ignorar
@@ -75,10 +85,10 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         // Ignorar si ya estaba detenido
       }
     }
-  }, [])
+  }, [linternaActiva])
 
   const guardarLibroEnEstanteria = useCallback(
-    async (datos: BorradorManual) => {
+    async (datos: FichaLibroPrevia, seguirEscaneando: boolean) => {
       setProcesando(true)
       try {
         const { error: catError } = await supabase.from('libros_catalogo').upsert({
@@ -122,7 +132,15 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         }
 
         onBookAdded()
-        onClose()
+
+        if (seguirEscaneando) {
+          setFichaPrevia(null)
+          setIsbnManual('')
+          escaneadoRef.current = false
+          setProcesando(false)
+        } else {
+          onClose()
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Error al guardar el libro'
         alert(msg)
@@ -132,7 +150,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     [supabase, userId, onBookAdded, onClose]
   )
 
-  const registrarLibroPorIsbn = useCallback(
+  const buscarFichaPorIsbn = useCallback(
     async (isbnCrudo: string) => {
       const isbn = isbnCrudo.replace(/[^0-9Xx]/g, '').toUpperCase()
       if (isbn.length !== 10 && isbn.length !== 13) {
@@ -155,7 +173,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         let portadaUrl = existente?.portada_url || ''
         let genero = existente?.genero || 'Otros'
         let sinopsis: string | null = existente?.sinopsis || null
-        let categoriasCrudas: string[] = []
+        const categoriasCrudas: string[] = []
 
         const necesitaMetadatos =
           !existente ||
@@ -200,7 +218,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
             // Continuar
           }
 
-          // 2. Rescate en Google Books por título + autor (para coger sinopsis/categorías de otras ediciones)
+          // 2. Rescate en Google Books por título + autor
           if (titulo && (!sinopsis || categoriasCrudas.length === 0)) {
             try {
               const primerAutor = autor.split(',')[0]?.trim()
@@ -289,28 +307,16 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           portadaUrl ||
           `https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg?default=false`
 
-        // Si ninguna fuente devolvió título o autor, pedirlos a mano al usuario
-        if (!titulo.trim() || !autor.trim()) {
-          setBorradorManual({
-            isbn,
-            titulo: titulo.trim(),
-            autor: autor.trim(),
-            portadaUrl: portadaFinal,
-            genero,
-            sinopsis,
-          })
-          setProcesando(false)
-          return
-        }
-
-        await guardarLibroEnEstanteria({
+        setFichaPrevia({
           isbn,
-          titulo,
-          autor,
+          titulo: titulo.trim(),
+          autor: autor.trim(),
           portadaUrl: portadaFinal,
           genero,
           sinopsis,
+          encontradoEnCatalogo: Boolean(titulo.trim() && autor.trim()),
         })
+        setProcesando(false)
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Error al buscar el libro'
         alert(msg)
@@ -318,27 +324,58 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         setProcesando(false)
       }
     },
-    [supabase, guardarLibroEnEstanteria]
+    [supabase]
   )
 
-  const registrarRef = useRef(registrarLibroPorIsbn)
+  const buscarRef = useRef(buscarFichaPorIsbn)
   useEffect(() => {
-    registrarRef.current = registrarLibroPorIsbn
-  }, [registrarLibroPorIsbn])
+    buscarRef.current = buscarFichaPorIsbn
+  }, [buscarFichaPorIsbn])
 
   useEffect(() => {
-    if (modo !== 'camara' || borradorManual) return
+    if (modo !== 'camara' || fichaPrevia) return
 
     let montado = true
     escaneadoRef.current = false
     setErrorCamara(null)
+    setSoportaLinterna(false)
+    setSoportaZoom(false)
+    setLinternaActiva(false)
+    setZoomActivo(false)
 
     const iniciarCamara = async () => {
       try {
+        // Detectar cámaras físicas disponibles para elegir la trasera principal (no gran angular)
+        let camarasElegibles = camarasTraseras
+        if (camarasElegibles.length === 0) {
+          try {
+            const todas = await Html5Qrcode.getCameras()
+            const traseras = todas.filter((c) =>
+              /back|rear|trasera|environment|0/i.test(c.label)
+            )
+            const listaBase = traseras.length > 0 ? traseras : todas
+            // Ordenar poniendo primero la lente principal y dejando al final las ultra gran angular
+            camarasElegibles = [...listaBase].sort((a, b) => {
+              const esGranAngularA = /wide|ultra|0\.5|0\.6|macro/i.test(a.label) ? 1 : 0
+              const esGranAngularB = /wide|ultra|0\.5|0\.6|macro/i.test(b.label) ? 1 : 0
+              return esGranAngularA - esGranAngularB
+            })
+            if (montado && camarasElegibles.length > 0) {
+              setCamarasTraseras(camarasElegibles)
+            }
+          } catch {
+            // Si aún no hay permiso concedido, arrancará con facingMode
+          }
+        }
+
+        if (!montado) return
+
         const html5Qr = new Html5Qrcode('reader-isbn', {
           formatsToSupport: [
             Html5QrcodeSupportedFormats.EAN_13,
             Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.CODE_128,
           ],
           experimentalFeatures: {
             useBarCodeDetectorIfSupported: true,
@@ -347,25 +384,36 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         })
         scannerRef.current = html5Qr
 
+        const camaraSeleccionada = camarasElegibles[indiceCamara % Math.max(1, camarasElegibles.length)]
+        const configCamara: string | MediaTrackConstraints = camaraSeleccionada?.id
+          ? camaraSeleccionada.id
+          : { facingMode: 'environment' }
+
         await html5Qr.start(
-          { facingMode: 'environment' },
+          configCamara,
           {
-            fps: 12,
+            fps: 15,
             qrbox: (viewfinderWidth, viewfinderHeight) => ({
-              width: Math.min(Math.floor(viewfinderWidth * 0.85), 320),
-              height: Math.min(Math.floor(viewfinderHeight * 0.35), 120),
+              width: Math.min(Math.floor(viewfinderWidth * 0.88), 340),
+              height: Math.min(Math.floor(viewfinderHeight * 0.36), 130),
             }),
             aspectRatio: 1.5,
-            videoConstraints: {
-              facingMode: { ideal: 'environment' },
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-            },
+            videoConstraints: camaraSeleccionada?.id
+              ? {
+                  deviceId: { exact: camaraSeleccionada.id },
+                  width: { ideal: 1920 },
+                  height: { ideal: 1080 },
+                }
+              : {
+                  facingMode: { ideal: 'environment' },
+                  width: { ideal: 1920 },
+                  height: { ideal: 1080 },
+                },
           },
           async (decodedText) => {
             if (escaneadoRef.current || !montado) return
             const limpio = decodedText.replace(/\D/g, '')
-            if (limpio.length === 13 || limpio.length === 10) {
+            if (limpio.length === 13 || limpio.length === 12 || limpio.length === 10) {
               escaneadoRef.current = true
               if (typeof navigator !== 'undefined' && navigator.vibrate) {
                 try {
@@ -376,7 +424,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               }
               await detenerCamaraSegura()
               if (montado) {
-                registrarRef.current(limpio)
+                buscarRef.current(limpio)
               }
             }
           },
@@ -389,6 +437,10 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           await detenerCamaraSegura()
           return
         }
+
+        // Esperar 350 ms para que Android/Chrome inicialice las capacidades reales del sensor
+        await new Promise((r) => setTimeout(r, 350))
+        if (!montado) return
 
         const videoEl = document.querySelector('#reader-isbn video') as HTMLVideoElement | null
         const stream = videoEl?.srcObject as MediaStream | null
@@ -403,20 +455,23 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               zoom?: { min: number; max: number; step: number }
             }
 
+            if (caps.torch) {
+              setSoportaLinterna(true)
+            }
+
             const constraintsAvanzados: Record<string, unknown> = {}
 
             if (caps.focusMode?.includes('continuous')) {
               constraintsAvanzados.focusMode = 'continuous'
             }
 
-            if (caps.zoom && caps.zoom.max >= 1.4) {
+            // Zoom ligero (1.5x) mejora muchísimo la lectura de códigos pequeños sin acercar tanto la lente
+            if (caps.zoom && caps.zoom.max >= 1.5) {
               setSoportaZoom(true)
-              constraintsAvanzados.zoom = Math.min(1.4, caps.zoom.max)
+              constraintsAvanzados.zoom = Math.min(1.5, caps.zoom.max)
               setZoomActivo(true)
-            }
-
-            if (caps.torch) {
-              setSoportaLinterna(true)
+            } else if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+              setSoportaZoom(true)
             }
 
             if (Object.keys(constraintsAvanzados).length > 0) {
@@ -425,7 +480,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               })
             }
           } catch {
-            // Ignorar
+            // Ignorar si algún constraint individual no es aceptado por el driver
           }
         }
       } catch {
@@ -442,10 +497,8 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
     return () => {
       montado = false
       detenerCamaraSegura()
-      setLinternaActiva(false)
-      setZoomActivo(false)
     }
-  }, [modo, borradorManual, detenerCamaraSegura])
+  }, [modo, fichaPrevia, indiceCamara, camarasTraseras, detenerCamaraSegura])
 
   const toggleLinterna = async () => {
     const track = videoTrackRef.current
@@ -457,7 +510,13 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
       })
       setLinternaActiva(nuevoEstado)
     } catch {
-      // Ignorar
+      // Fallback directo por si el navegador prefiere constraint no-advanced
+      try {
+        await track.applyConstraints({ torch: nuevoEstado } as MediaTrackConstraintSet)
+        setLinternaActiva(nuevoEstado)
+      } catch {
+        alert('Tu navegador no permite activar el flash en esta lente. Prueba cambiando de lente.')
+      }
     }
   }
 
@@ -469,7 +528,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         zoom?: { min: number; max: number }
       }
       if (!caps.zoom) return
-      const nuevoZoom = zoomActivo ? 1 : Math.min(1.5, caps.zoom.max)
+      const nuevoZoom = zoomActivo ? caps.zoom.min || 1 : Math.min(1.6, caps.zoom.max)
       await track.applyConstraints({
         advanced: [{ zoom: nuevoZoom } as MediaTrackConstraintSet],
       })
@@ -481,14 +540,31 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
 
   const tocarParaEnfocar = async () => {
     const track = videoTrackRef.current
-    if (!track) return
+    if (!track || typeof track.getCapabilities !== 'function') return
     try {
-      await track.applyConstraints({
-        advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
-      })
+      const caps = track.getCapabilities() as MediaTrackCapabilities & {
+        focusMode?: string[]
+      }
+      // Forzar ciclo single-shot -> continuous obliga a la lente de Android a reenfocar al instante
+      if (caps.focusMode?.includes('single-shot')) {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'single-shot' } as MediaTrackConstraintSet],
+        })
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      if (caps.focusMode?.includes('continuous')) {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+        })
+      }
     } catch {
       // Ignorar
     }
+  }
+
+  const cambiarLente = async () => {
+    await detenerCamaraSegura()
+    setIndiceCamara((prev) => prev + 1)
   }
 
   const handleCerrar = async () => {
@@ -508,7 +584,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         <div className="px-5 py-3.5 border-b border-stone-100 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-stone-900 text-sm">
             <ScanBarcode className="w-4 h-4 text-emerald-700" />
-            <span>Añadir libro por ISBN</span>
+            <span>{fichaPrevia ? 'Revisar ficha del libro' : 'Añadir libro por ISBN'}</span>
           </div>
           <button
             type="button"
@@ -520,7 +596,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         </div>
 
         <div className="p-4 space-y-4">
-          {!procesando && !borradorManual && (
+          {!procesando && !fichaPrevia && (
             <div className="grid grid-cols-2 gap-2 bg-stone-100 p-1 rounded-xl text-xs font-semibold">
               <button
                 type="button"
@@ -556,21 +632,63 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
             <div className="py-14 flex flex-col items-center justify-center text-center gap-2">
               <Loader2 className="w-7 h-7 animate-spin text-emerald-700" />
               <p className="text-xs font-semibold text-stone-800">
-                Buscando ficha, género y sinopsis del libro...
+                Buscando ficha, portada y sinopsis...
               </p>
             </div>
-          ) : borradorManual ? (
+          ) : fichaPrevia ? (
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                if (!borradorManual.titulo.trim() || !borradorManual.autor.trim()) return
-                guardarLibroEnEstanteria(borradorManual)
+                if (!fichaPrevia.titulo.trim() || !fichaPrevia.autor.trim()) return
+                guardarLibroEnEstanteria(fichaPrevia, false)
               }}
-              className="space-y-3 py-1"
+              className="space-y-3.5 py-1"
             >
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900">
-                No hemos encontrado la ficha completa del ISBN{' '}
-                <strong>{borradorManual.isbn}</strong> en los catálogos externos. Complétala a mano para guardarlo:
+              {/* Cabecera visual con portada + estado de recuperación */}
+              <div className="flex gap-3.5 bg-stone-50 border border-stone-200 rounded-2xl p-3">
+                <div className="w-16 h-24 rounded-lg overflow-hidden bg-stone-200 shrink-0 border border-stone-200 flex items-center justify-center">
+                  {fichaPrevia.portadaUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={fichaPrevia.portadaUrl}
+                      alt={fichaPrevia.titulo || 'Portada'}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  ) : (
+                    <span className="text-[10px] text-stone-400 text-center px-1">
+                      Sin portada
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0 flex flex-col justify-between">
+                  <div>
+                    <span className="inline-block text-[10px] font-mono bg-stone-200/80 text-stone-700 px-2 py-0.5 rounded-md">
+                      ISBN {fichaPrevia.isbn}
+                    </span>
+                    <p className="text-xs font-bold text-stone-900 mt-1 line-clamp-2">
+                      {fichaPrevia.titulo || 'Título pendiente de completar'}
+                    </p>
+                    <p className="text-[11px] text-stone-500 truncate">
+                      {fichaPrevia.autor || 'Autor pendiente'}
+                    </p>
+                  </div>
+
+                  <p
+                    className={`text-[11px] font-medium ${
+                      fichaPrevia.encontradoEnCatalogo
+                        ? 'text-emerald-700'
+                        : 'text-amber-700'
+                    }`}
+                  >
+                    {fichaPrevia.encontradoEnCatalogo
+                      ? 'Revisa género y sinopsis antes de guardar'
+                      : 'No encontrado en catálogos; complétalo a mano'}
+                  </p>
+                </div>
               </div>
 
               <div>
@@ -580,13 +698,12 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 <input
                   type="text"
                   required
-                  autoFocus
-                  value={borradorManual.titulo}
+                  value={fichaPrevia.titulo}
                   onChange={(e) =>
-                    setBorradorManual({ ...borradorManual, titulo: e.target.value })
+                    setFichaPrevia({ ...fichaPrevia, titulo: e.target.value })
                   }
-                  placeholder="Ej. La muerte contada por un sapiens a un neandertal"
-                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                  placeholder="Título del libro"
+                  className="w-full px-3.5 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
                 />
               </div>
 
@@ -597,25 +714,27 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 <input
                   type="text"
                   required
-                  value={borradorManual.autor}
+                  value={fichaPrevia.autor}
                   onChange={(e) =>
-                    setBorradorManual({ ...borradorManual, autor: e.target.value })
+                    setFichaPrevia({ ...fichaPrevia, autor: e.target.value })
                   }
-                  placeholder="Ej. Juan José Millás, Juan Luis Arsuaga"
-                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                  placeholder="Autor o autores"
+                  className="w-full px-3.5 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-stone-700 mb-1">Género</label>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  Género (auto-detectado)
+                </label>
                 <select
-                  value={borradorManual.genero}
+                  value={fichaPrevia.genero}
                   onChange={(e) =>
-                    setBorradorManual({ ...borradorManual, genero: e.target.value })
+                    setFichaPrevia({ ...fichaPrevia, genero: e.target.value })
                   }
-                  className="w-full px-3.5 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
+                  className="w-full px-3.5 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
                 >
-                  {GENEROS_EXLIBRIS.map((g) => (
+                  {GENEROS_ESTANDAR.map((g) => (
                     <option key={g} value={g}>
                       {g}
                     </option>
@@ -625,36 +744,55 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
 
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">
-                  Sinopsis (opcional)
+                  Sinopsis{' '}
+                  {!fichaPrevia.sinopsis && (
+                    <span className="font-normal text-amber-700">
+                      (no disponible en API, puedes añadirla)
+                    </span>
+                  )}
                 </label>
                 <textarea
                   rows={3}
-                  value={borradorManual.sinopsis || ''}
+                  value={fichaPrevia.sinopsis || ''}
                   onChange={(e) =>
-                    setBorradorManual({ ...borradorManual, sinopsis: e.target.value })
+                    setFichaPrevia({ ...fichaPrevia, sinopsis: e.target.value })
                   }
-                  placeholder="Breve resumen del libro..."
+                  placeholder="Resumen o contraportada del libro..."
                   className="w-full px-3.5 py-2 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-emerald-600 resize-none"
                 />
               </div>
 
-              <div className="flex gap-2 pt-1">
+              <div className="space-y-2 pt-1">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFichaPrevia(null)
+                      escaneadoRef.current = false
+                    }}
+                    className="px-3 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-semibold cursor-pointer"
+                  >
+                    Descartar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Guardar en estantería</span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => {
-                    setBorradorManual(null)
-                    escaneadoRef.current = false
+                    if (!fichaPrevia.titulo.trim() || !fichaPrevia.autor.trim()) return
+                    guardarLibroEnEstanteria(fichaPrevia, true)
                   }}
-                  className="px-3.5 py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl text-xs font-semibold cursor-pointer"
+                  className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  Volver
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>Guardar en mi estantería</span>
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>Guardar y escanear otro</span>
                 </button>
               </div>
             </form>
@@ -679,45 +817,54 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                   >
                     <div id="reader-isbn" className="w-full" />
 
-                    {(soportaLinterna || soportaZoom) && (
-                      <div
-                        className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5 z-10"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {soportaZoom && (
-                          <button
-                            type="button"
-                            onClick={toggleZoom}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
-                              zoomActivo
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-black/70 text-white hover:bg-black/85'
-                            }`}
-                          >
-                            <ZoomIn className="w-3.5 h-3.5" />
-                            <span>{zoomActivo ? '1.4x' : '1x'}</span>
-                          </button>
-                        )}
-                        {soportaLinterna && (
-                          <button
-                            type="button"
-                            onClick={toggleLinterna}
-                            className={`p-2 rounded-lg transition cursor-pointer ${
-                              linternaActiva
-                                ? 'bg-amber-400 text-stone-950'
-                                : 'bg-black/70 text-white hover:bg-black/85'
-                            }`}
-                            title="Encender/apagar linterna"
-                          >
-                            <Flashlight className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    <div
+                      className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5 z-10"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {camarasTraseras.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={cambiarLente}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-black/70 text-white hover:bg-black/85 flex items-center gap-1 transition cursor-pointer"
+                          title="Cambiar de lente trasera"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Lente</span>
+                        </button>
+                      )}
+                      {soportaZoom && (
+                        <button
+                          type="button"
+                          onClick={toggleZoom}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer ${
+                            zoomActivo
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-black/70 text-white hover:bg-black/85'
+                          }`}
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                          <span>{zoomActivo ? '1.5x' : '1x'}</span>
+                        </button>
+                      )}
+                      {soportaLinterna && (
+                        <button
+                          type="button"
+                          onClick={toggleLinterna}
+                          className={`p-2 rounded-lg transition cursor-pointer ${
+                            linternaActiva
+                              ? 'bg-amber-400 text-stone-950'
+                              : 'bg-black/70 text-white hover:bg-black/85'
+                          }`}
+                          title="Encender/apagar linterna"
+                        >
+                          <Flashlight className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <p className="text-[11px] text-stone-500 text-center leading-relaxed">
-                    Separa el móvil unos <strong>15–20 cm</strong> del código de barras (el que empieza por <strong>978</strong> o <strong>979</strong>) y toca la imagen si necesita reenfocar.
+                    Mantén el móvil a <strong>18–25 cm</strong> del código de barras y <strong>toca la pantalla</strong> para reenfocar. Si se ve desenfocado de cerca, pulsa <strong>Lente</strong>.
                   </p>
                 </>
               )}
@@ -726,7 +873,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                registrarLibroPorIsbn(isbnManual)
+                buscarFichaPorIsbn(isbnManual)
               }}
               className="space-y-3 py-2"
             >
@@ -748,7 +895,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                 type="submit"
                 className="w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-xs cursor-pointer"
               >
-                Buscar y añadir libro
+                Buscar ficha del libro
               </button>
             </form>
           )}
