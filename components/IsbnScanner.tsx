@@ -345,31 +345,6 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
 
     const iniciarCamara = async () => {
       try {
-        // Detectar cámaras físicas disponibles para elegir la trasera principal (no gran angular)
-        let camarasElegibles = camarasTraseras
-        if (camarasElegibles.length === 0) {
-          try {
-            const todas = await Html5Qrcode.getCameras()
-            const traseras = todas.filter((c) =>
-              /back|rear|trasera|environment|0/i.test(c.label)
-            )
-            const listaBase = traseras.length > 0 ? traseras : todas
-            // Ordenar poniendo primero la lente principal y dejando al final las ultra gran angular
-            camarasElegibles = [...listaBase].sort((a, b) => {
-              const esGranAngularA = /wide|ultra|0\.5|0\.6|macro/i.test(a.label) ? 1 : 0
-              const esGranAngularB = /wide|ultra|0\.5|0\.6|macro/i.test(b.label) ? 1 : 0
-              return esGranAngularA - esGranAngularB
-            })
-            if (montado && camarasElegibles.length > 0) {
-              setCamarasTraseras(camarasElegibles)
-            }
-          } catch {
-            // Si aún no hay permiso concedido, arrancará con facingMode
-          }
-        }
-
-        if (!montado) return
-
         const html5Qr = new Html5Qrcode('reader-isbn', {
           formatsToSupport: [
             Html5QrcodeSupportedFormats.EAN_13,
@@ -384,9 +359,9 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
         })
         scannerRef.current = html5Qr
 
-        const camaraSeleccionada = camarasElegibles[indiceCamara % Math.max(1, camarasElegibles.length)]
-        const configCamara: string | MediaTrackConstraints = camaraSeleccionada?.id
-          ? camaraSeleccionada.id
+        const camaraElegida = camarasTraseras[indiceCamara]
+        const configCamara: string | MediaTrackConstraints = camaraElegida?.id
+          ? camaraElegida.id
           : { facingMode: 'environment' }
 
         await html5Qr.start(
@@ -398,16 +373,16 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               height: Math.min(Math.floor(viewfinderHeight * 0.36), 130),
             }),
             aspectRatio: 1.5,
-            videoConstraints: camaraSeleccionada?.id
+            videoConstraints: camaraElegida?.id
               ? {
-                  deviceId: { exact: camaraSeleccionada.id },
-                  width: { ideal: 1920 },
-                  height: { ideal: 1080 },
+                  deviceId: { exact: camaraElegida.id },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
                 }
               : {
                   facingMode: { ideal: 'environment' },
-                  width: { ideal: 1920 },
-                  height: { ideal: 1080 },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
                 },
           },
           async (decodedText) => {
@@ -438,8 +413,28 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
           return
         }
 
-        // Esperar 350 ms para que Android/Chrome inicialice las capacidades reales del sensor
-        await new Promise((r) => setTimeout(r, 350))
+        // Ahora que ya hay permiso concedido, enumerar solo las cámaras traseras reales
+        if (camarasTraseras.length === 0) {
+          try {
+            const todas = await Html5Qrcode.getCameras()
+            const traseras = todas.filter((c) =>
+              /back|rear|trasera|environment/i.test(c.label)
+            )
+            if (montado && traseras.length > 1) {
+              const ordenadas = [...traseras].sort((a, b) => {
+                const esGranAngularA = /wide|ultra|0\.5|0\.6|macro/i.test(a.label) ? 1 : 0
+                const esGranAngularB = /wide|ultra|0\.5|0\.6|macro/i.test(b.label) ? 1 : 0
+                return esGranAngularA - esGranAngularB
+              })
+              setCamarasTraseras(ordenadas)
+            }
+          } catch {
+            // Ignorar
+          }
+        }
+
+        // Esperar 500 ms para que el driver de cámara de Android estabilice capacidades
+        await new Promise((r) => setTimeout(r, 500))
         if (!montado) return
 
         const videoEl = document.querySelector('#reader-isbn video') as HTMLVideoElement | null
@@ -459,28 +454,25 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
               setSoportaLinterna(true)
             }
 
-            const constraintsAvanzados: Record<string, unknown> = {}
-
             if (caps.focusMode?.includes('continuous')) {
-              constraintsAvanzados.focusMode = 'continuous'
-            }
-
-            // Zoom ligero (1.5x) mejora muchísimo la lectura de códigos pequeños sin acercar tanto la lente
-            if (caps.zoom && caps.zoom.max >= 1.5) {
-              setSoportaZoom(true)
-              constraintsAvanzados.zoom = Math.min(1.5, caps.zoom.max)
-              setZoomActivo(true)
-            } else if (caps.zoom && caps.zoom.max > caps.zoom.min) {
-              setSoportaZoom(true)
-            }
-
-            if (Object.keys(constraintsAvanzados).length > 0) {
               await track.applyConstraints({
-                advanced: [constraintsAvanzados as MediaTrackConstraintSet],
+                advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
               })
             }
+
+            if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+              setSoportaZoom(true)
+              // Subir zoom a 1.6x permite escanear desde más lejos sin perder foco
+              const zoomInicial = Math.min(1.6, caps.zoom.max)
+              if (zoomInicial > (caps.zoom.min || 1)) {
+                await track.applyConstraints({
+                  advanced: [{ zoom: zoomInicial } as MediaTrackConstraintSet],
+                })
+                setZoomActivo(true)
+              }
+            }
           } catch {
-            // Ignorar si algún constraint individual no es aceptado por el driver
+            // Ignorar si algún constraint individual no es aceptado
           }
         }
       } catch {
@@ -817,7 +809,7 @@ export default function IsbnScanner({ userId, onClose, onBookAdded }: IsbnScanne
                   >
                     <div id="reader-isbn" className="w-full" />
 
-                    <div
+<div
                       className="absolute bottom-2.5 right-2.5 flex items-center gap-1.5 z-10"
                       onClick={(e) => e.stopPropagation()}
                     >
