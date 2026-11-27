@@ -503,7 +503,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
         url: '/',
       }),
       enviarNotificacionEmail({
-        tipo: 'prestamo',
+        tipo: 'usuario',
         destinatarioId: ejemplar.propietario_id,
         asunto: `Exlibris · Solicitud de "${ejemplar.libros_catalogo.titulo}"`,
         titulo: `Nueva solicitud de préstamo en ${clubActivo.nombre}`,

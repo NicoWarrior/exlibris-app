@@ -517,7 +517,7 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
           url: '/',
         }),
         enviarNotificacionEmail({
-          tipo: 'prestamo',
+          tipo: 'usuario',
           destinatarioId: propietarioIdSeguro,
           asunto: `Exlibris · Solicitud de "${tituloActual}"`,
           titulo: tituloAviso,
