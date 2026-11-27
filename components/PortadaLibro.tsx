@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BookOpen } from 'lucide-react'
 import { createClient } from '@/utils/supabase/client'
 
@@ -13,12 +13,18 @@ interface PortadaLibroProps {
   onImagenRota?: () => void
 }
 
-const CACHE_KEY = 'exlibris_portadas_cache_v1'
+const CACHE_KEY = 'exlibris_portadas_cache_v2'
 const memoriaCache = new Map<string, string>()
 const isbnsActualizadosEnDb = new Set<string>()
 let colaFetch: Promise<void> = Promise.resolve()
 
+function normalizarIsbn(isbn?: string): string {
+  if (!isbn) return ''
+  return isbn.replace(/[^0-9X]/gi, '').toUpperCase()
+}
+
 function leerCacheLocal(isbn: string): string | null {
+  if (isbn.length < 10) return null
   if (memoriaCache.has(isbn)) return memoriaCache.get(isbn) || null
   if (typeof window === 'undefined') return null
   try {
@@ -36,6 +42,7 @@ function leerCacheLocal(isbn: string): string | null {
 }
 
 function guardarCacheLocal(isbn: string, url: string) {
+  if (isbn.length < 10) return
   memoriaCache.set(isbn, url)
   if (typeof window === 'undefined') return
   try {
@@ -54,6 +61,7 @@ function limpiarUrl(url?: string | null): string {
 }
 
 function buscarEnGoogleBooksEnCola(isbn: string): Promise<string | null> {
+  if (isbn.length < 10) return Promise.resolve(null)
   const cached = leerCacheLocal(isbn)
   if (cached) return Promise.resolve(cached)
 
@@ -75,9 +83,18 @@ function buscarEnGoogleBooksEnCola(isbn: string): Promise<string | null> {
           const res = await fetch(endpoint)
           if (res.ok) {
             const data = await res.json()
+            // Verificar que el volumen devuelto realmente corresponda al ISBN buscado
+            const itemCoincidente = (data.items || []).find((item: any) => {
+              const ids = item?.volumeInfo?.industryIdentifiers || []
+              return ids.some(
+                (idObj: any) => normalizarIsbn(idObj?.identifier) === isbn
+              )
+            })
+
             const thumb =
-              data.items?.[0]?.volumeInfo?.imageLinks?.thumbnail ||
-              data.items?.[0]?.volumeInfo?.imageLinks?.smallThumbnail
+              itemCoincidente?.volumeInfo?.imageLinks?.thumbnail ||
+              itemCoincidente?.volumeInfo?.imageLinks?.smallThumbnail
+
             if (thumb) {
               const urlLimpia = limpiarUrl(thumb)
               guardarCacheLocal(isbn, urlLimpia)
@@ -105,25 +122,25 @@ export default function PortadaLibro({
   compacto = false,
   onImagenRota,
 }: PortadaLibroProps) {
+  const isbnNorm = normalizarIsbn(isbn)
+  const isbnActualRef = useRef<string>(isbnNorm)
+  isbnActualRef.current = isbnNorm
+
   const [urlActiva, setUrlActiva] = useState<string>(() => {
-    if (isbn) {
-      const cached = leerCacheLocal(isbn)
-      if (cached) return cached
-    }
-    return limpiarUrl(src)
+    return leerCacheLocal(isbnNorm) || limpiarUrl(src)
   })
   const [intentadoFallback, setIntentadoFallback] = useState(false)
   const [errorFinal, setErrorFinal] = useState(false)
 
   useEffect(() => {
-    const inicial = (isbn && leerCacheLocal(isbn)) || limpiarUrl(src)
+    const inicial = leerCacheLocal(isbnNorm) || limpiarUrl(src)
     setUrlActiva(inicial)
     setIntentadoFallback(false)
     setErrorFinal(false)
-  }, [src, isbn])
+  }, [src, isbnNorm])
 
   const persistirEnCatalogo = async (isbnLibro: string, nuevaUrl: string) => {
-    if (isbnsActualizadosEnDb.has(isbnLibro)) return
+    if (isbnLibro.length < 10 || isbnsActualizadosEnDb.has(isbnLibro)) return
     isbnsActualizadosEnDb.add(isbnLibro)
     try {
       const supabase = createClient()
@@ -132,34 +149,39 @@ export default function PortadaLibro({
         .update({ portada_url: nuevaUrl })
         .eq('isbn', isbnLibro)
     } catch {
-      // Si RLS bloquea el update en libros_catalogo, ya queda cacheado en localStorage
+      // Si RLS bloquea el update, queda cacheado en localStorage
     }
   }
 
   const manejarError = async () => {
-    if (!intentadoFallback && isbn) {
+    const isbnAlDisparar = isbnNorm
+    if (!intentadoFallback && isbnAlDisparar.length >= 10) {
       setIntentadoFallback(true)
-      const urlRecuperada = await buscarEnGoogleBooksEnCola(isbn)
+      const urlRecuperada = await buscarEnGoogleBooksEnCola(isbnAlDisparar)
+      // Descartar si la tarjeta ya cambió a otro libro mientras esperaba
+      if (isbnActualRef.current !== isbnAlDisparar) return
+
       if (urlRecuperada && urlRecuperada !== urlActiva) {
         setUrlActiva(urlRecuperada)
-        persistirEnCatalogo(isbn, urlRecuperada)
+        persistirEnCatalogo(isbnAlDisparar, urlRecuperada)
         return
       }
     }
 
-    setErrorFinal(true)
-    if (onImagenRota) onImagenRota()
+    if (isbnActualRef.current === isbnAlDisparar) {
+      setErrorFinal(true)
+      if (onImagenRota) onImagenRota()
+    }
   }
 
   const manejarCarga = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget
-    // Open Library devuelve un GIF transparente de 1x1 cuando no tiene portada
     if (img.naturalWidth <= 1 || img.naturalHeight <= 1) {
       manejarError()
       return
     }
-    if (isbn && urlActiva && urlActiva !== limpiarUrl(src)) {
-      guardarCacheLocal(isbn, urlActiva)
+    if (isbnNorm.length >= 10 && urlActiva && urlActiva !== limpiarUrl(src)) {
+      guardarCacheLocal(isbnNorm, urlActiva)
     }
   }
 
