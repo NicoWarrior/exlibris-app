@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     }
 
     await transporter.sendMail({
-      from: `"Exlibris" <${process.env.GMAIL_USER}>`,
+      from: `"Exlibris· Comparte lectura" <${process.env.GMAIL_USER}>`,
       to: emailDestino,
       subject: asunto || `Exlibris · ${titulo}`,
       text: `${titulo}\n\n${cuerpo}\n\nAbrir Exlibris: ${url}`,
