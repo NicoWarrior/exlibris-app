@@ -63,7 +63,6 @@ export default function TablonEventosTab({
 
   const cpInicializadoRef = useRef(Boolean(codigoPostalUsuario))
 
-  // Formulario de nuevo anuncio
   const [mostrandoForm, setMostrandoForm] = useState(false)
   const [titulo, setTitulo] = useState('')
   const [categoria, setCategoria] = useState<EventoLiterario['categoria']>('coloquio')
@@ -101,7 +100,6 @@ export default function TablonEventosTab({
     const cpLimpio = cpFiltro.trim()
 
     if (verTodosCp) {
-      // Si hay al menos 2 dígitos (ej. 20xxx Donostia, 48xxx Bilbao), muestra toda esa ciudad/provincia
       if (cpLimpio.length >= 2) {
         query = query.ilike('codigo_postal', `${cpLimpio.slice(0, 2)}%`)
       }
@@ -222,7 +220,6 @@ export default function TablonEventosTab({
 
   return (
     <div className="bg-white border border-stone-200 rounded-2xl p-4 shadow-xs space-y-4">
-      {/* Cabecera */}
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="text-sm font-bold text-stone-900 flex items-center gap-1.5">
@@ -256,7 +253,6 @@ export default function TablonEventosTab({
         </div>
       </div>
 
-      {/* Formulario de nuevo evento */}
       {mostrandoForm && (
         <form
           onSubmit={publicarEvento}
@@ -353,7 +349,6 @@ export default function TablonEventosTab({
         </form>
       )}
 
-      {/* Filtros por CP y categoría */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <input
@@ -370,19 +365,33 @@ export default function TablonEventosTab({
               }
             }}
             placeholder="CP..."
-            className="w-24 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-800 focus:outline-none focus:border-emerald-600"
+            className="w-20 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-xs font-mono text-stone-800 focus:outline-none focus:border-emerald-600"
           />
-          <button
-            type="button"
-            onClick={() => setVerTodosCp((prev) => !prev)}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-medium border cursor-pointer transition ${
-              verTodosCp
-                ? 'bg-stone-800 text-white border-stone-800'
-                : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
-            }`}
-          >
-            {verTodosCp ? 'Toda la ciudad' : 'Solo este CP'}
-          </button>
+
+          <div className="inline-flex bg-stone-100 p-0.5 rounded-xl border border-stone-200/80 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setVerTodosCp(false)}
+              className={`px-2.5 py-1 rounded-lg cursor-pointer transition ${
+                !verTodosCp
+                  ? 'bg-white text-stone-900 shadow-2xs font-semibold'
+                  : 'text-stone-500 hover:text-stone-800'
+              }`}
+            >
+              Mi barrio
+            </button>
+            <button
+              type="button"
+              onClick={() => setVerTodosCp(true)}
+              className={`px-2.5 py-1 rounded-lg cursor-pointer transition ${
+                verTodosCp
+                  ? 'bg-stone-800 text-white shadow-2xs font-semibold'
+                  : 'text-stone-500 hover:text-stone-800'
+              }`}
+            >
+              Toda la ciudad
+            </button>
+          </div>
         </div>
 
         <div className="flex gap-1 overflow-x-auto pb-0.5">
@@ -409,17 +418,28 @@ export default function TablonEventosTab({
         </div>
       </div>
 
-      {/* Listado de eventos */}
       {cargando ? (
         <div className="py-6 text-center text-xs text-stone-400">Cargando agenda literaria...</div>
       ) : eventos.length === 0 ? (
-        <div className="bg-stone-50 border border-dashed border-stone-200 rounded-2xl p-6 text-center space-y-1.5">
-          <p className="text-xs font-semibold text-stone-600">
-            No hay eventos próximos para este filtro.
+        <div className="bg-stone-50 border border-dashed border-stone-200 rounded-2xl p-6 text-center space-y-2.5">
+          <p className="text-xs font-semibold text-stone-700">
+            {!verTodosCp && cpFiltro
+              ? `No hay eventos próximos en el CP ${cpFiltro}.`
+              : 'No hay eventos próximos para este filtro.'}
           </p>
-          <p className="text-[11px] text-stone-400">
-            Prueba activando &ldquo;Toda la ciudad&rdquo; o publica el primer encuentro literario.
-          </p>
+          {!verTodosCp && cpFiltro.length >= 2 ? (
+            <button
+              type="button"
+              onClick={() => setVerTodosCp(true)}
+              className="px-3.5 py-1.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-semibold cursor-pointer transition"
+            >
+              Ver eventos en toda la ciudad
+            </button>
+          ) : (
+            <p className="text-[11px] text-stone-400">
+              Anímate a publicar el primer encuentro literario con el botón superior.
+            </p>
+          )}
         </div>
       ) : (
         <div className="space-y-2.5">
