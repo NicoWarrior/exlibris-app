@@ -83,6 +83,8 @@ export default function ExplorarLocalTab({
   const [mostrarMapa, setMostrarMapa] = useState(false)
   const [mostrarTablon, setMostrarTablon] = useState(false)
 
+
+
   const cargarMisDeseos = useCallback(async () => {
     const { data } = await supabase
       .from('lista_deseos')
@@ -93,6 +95,37 @@ export default function ExplorarLocalTab({
       setDeseosIsbns(new Set(data.map((d) => d.isbn)))
     }
   }, [supabase, userId])
+
+const [eventosActivosCount, setEventosActivosCount] = useState(0)
+const [hayEventosNuevos, setHayEventosNuevos] = useState(false)
+
+const comprobarEventosZona = useCallback(
+  async (cpLimpio: string) => {
+    const hoy = new Date().toISOString().split('T')[0]
+    const prefijoProvincia = cpLimpio.slice(0, 2)
+
+    const { data: eventosData, count } = await supabase
+      .from('eventos_literarios')
+      .select('id, created_at', { count: 'exact' })
+      .like('codigo_postal', `${prefijoProvincia}%`)
+      .gte('fecha', hoy)
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    const total = count || 0
+    setEventosActivosCount(total)
+
+    if (total > 0 && eventosData && eventosData[0] && typeof window !== 'undefined') {
+      const claveVisto = `exlibris_tablon_ultimo_visto_${prefijoProvincia}`
+      const ultimoVisto = window.localStorage.getItem(claveVisto)
+      const ultimaMarca = eventosData[0].created_at || String(eventosData[0].id)
+      setHayEventosNuevos(ultimoVisto !== ultimaMarca)
+    } else {
+      setHayEventosNuevos(false)
+    }
+  },
+  [supabase]
+)
 
   const buscarEnCodigoPostal = useCallback(
     async (cp: string) => {
@@ -200,9 +233,12 @@ export default function ExplorarLocalTab({
         })
 
       setLibrosZona(combinados)
+      await comprobarEventosZona(cpLimpio)
       setCargandoLibros(false)
     },
-    [supabase, userId]
+    [supabase, userId, comprobarEventosZona]
+    
+    
   )
 
   useEffect(() => {
@@ -451,10 +487,27 @@ export default function ExplorarLocalTab({
             <button
               type="button"
               onClick={() => {
-                setMostrarTablon((prev) => !prev)
+                const abrir = !mostrarTablon
+                setMostrarTablon(abrir)
                 setMostrarMapa(false)
+                if (abrir && cpActual && typeof window !== 'undefined') {
+                  const prefijoProvincia = cpActual.slice(0, 2)
+                  supabase
+                    .from('eventos_literarios')
+                    .select('id, created_at')
+                    .like('codigo_postal', `${prefijoProvincia}%`)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .then(({ data }) => {
+                      if (data && data[0]) {
+                        const marca = data[0].created_at || String(data[0].id)
+                        window.localStorage.setItem(`exlibris_tablon_ultimo_visto_${prefijoProvincia}`, marca)
+                      }
+                      setHayEventosNuevos(false)
+                    })
+                }
               }}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-semibold cursor-pointer transition ${
+              className={`relative inline-flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-semibold cursor-pointer transition ${
                 mostrarTablon
                   ? 'bg-amber-600 text-white border-amber-600'
                   : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
@@ -462,6 +515,18 @@ export default function ExplorarLocalTab({
             >
               <Megaphone className="w-3.5 h-3.5" />
               <span>{mostrarTablon ? 'Ocultar tablón' : 'Tablón literario'}</span>
+
+              {eventosActivosCount > 0 && !mostrarTablon && (
+                <span
+                  className={`ml-0.5 text-[10px] font-bold min-w-[18px] h-[18px] px-1.5 rounded-full flex items-center justify-center shadow-2xs ${
+                    hayEventosNuevos
+                      ? 'bg-red-600 text-white'
+                      : 'bg-amber-600 text-white'
+                  }`}
+                >
+                  {eventosActivosCount > 99 ? '99+' : eventosActivosCount}
+                </span>
+              )}
             </button>
           </div>
 
