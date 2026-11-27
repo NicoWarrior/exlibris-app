@@ -6,6 +6,7 @@ import { comprimirImagen } from '@/utils/comprimirImagen'
 import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
+import CriticasPrensaLibro from '@/components/CriticasPrensaLibro'
 import {
   Award,
   BookCheck,
@@ -1022,7 +1023,10 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             )}
           </div>
 
+          <CriticasPrensaLibro isbn={libro.isbn} />
+
           {/* VALORACIONES GLOBALES (CON NOMBRE EN CLUB Y ANÓNIMAS EN RESTO DE EXLIBRIS) */}
+          <div className="border-t border-stone-100 pt-4 space-y-3.5">
           <div className="border-t border-stone-100 pt-4 space-y-3.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
