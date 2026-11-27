@@ -5,7 +5,6 @@ import { createClient } from '@/utils/supabase/client'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
-import { enviarNotificacionPush } from '@/utils/notificaciones'
 import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 import {
   Award,

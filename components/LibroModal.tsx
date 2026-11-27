@@ -7,7 +7,6 @@ import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
 import CriticasPrensaLibro from '@/components/CriticasPrensaLibro'
-import { enviarNotificacionPush } from '@/utils/notificaciones'
 import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 import {
   Award,
