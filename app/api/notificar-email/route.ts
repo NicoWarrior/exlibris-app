@@ -73,9 +73,11 @@ export async function POST(request: Request) {
     })
 
     return NextResponse.json({ ok: true })
-  } catch (err: unknown) {
-  const msg = err instanceof Error ? err.message : String(err)
-  console.error('Error enviando email:', msg)
-  return NextResponse.json({ error: msg }, { status: 500 })
-}
+  } catch (err) {
+    console.error('Error enviando email:', err)
+    return NextResponse.json(
+      { error: 'Error interno enviando email' },
+      { status: 500 }
+    )
+  }
 }
