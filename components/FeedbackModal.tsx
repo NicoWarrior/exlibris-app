@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import { Bug, CheckCircle2, Lightbulb, MessageSquarePlus, Send, Sparkles, X } from 'lucide-react'
+import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 
 interface FeedbackModalProps {
   abierto: boolean
@@ -44,6 +45,29 @@ export default function FeedbackModal({
       mensaje: textoLimpio,
       pantalla: pantallaActual,
       user_agent: userAgent,
+    })
+
+    setEnviando(false)
+
+    if (error) {
+      alert(`No se pudo enviar el mensaje: ${error.message}`)
+      return
+    }
+
+    if (ADMIN_USER_ID) {
+      enviarNotificacionPush({
+        destinatarioId: ADMIN_USER_ID,
+        titulo: `Feedback (${tipo.toUpperCase()}) de ${nombreUsuario}`,
+        cuerpo: textoLimpio.slice(0, 120),
+        url: '/',
+      })
+    }
+
+    enviarNotificacionEmail({
+      tipo: 'feedback_admin',
+      asunto: `[Exlibris · ${tipo.toUpperCase()}] Comentario de ${nombreUsuario}`,
+      titulo: `Nuevo feedback (${tipo.toUpperCase()})`,
+      cuerpo: `De: ${nombreUsuario}\nPantalla: ${pantallaActual}\n\n${textoLimpio}\n\nDispositivo: ${userAgent}`,
     })
 
     setEnviando(false)
