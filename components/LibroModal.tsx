@@ -149,7 +149,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
         return
       }
 
-      // Solo consultamos nombres de usuarios que pertenecen al mismo club activo o son el propio usuario
       const idsIdentificables = Array.from(
         new Set(
           resenasData
@@ -883,7 +882,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
             </div>
           </div>
 
-          {/* BOTONES DE SOLICITAR PRÉSTAMO Y GUARDAR EN ¡Me lo apunto! */}
           {!libro.esPropio && (
             <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 space-y-3">
               <div className="text-xs">
@@ -1025,8 +1023,6 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
           <CriticasPrensaLibro isbn={libro.isbn} />
 
-          {/* VALORACIONES GLOBALES (CON NOMBRE EN CLUB Y ANÓNIMAS EN RESTO DE EXLIBRIS) */}
-          <div className="border-t border-stone-100 pt-4 space-y-3.5">
           <div className="border-t border-stone-100 pt-4 space-y-3.5">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center gap-1.5">
