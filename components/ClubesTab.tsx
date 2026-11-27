@@ -5,6 +5,8 @@ import { createClient } from '@/utils/supabase/client'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PortadaLibro from '@/components/PortadaLibro'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
+import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 import {
   Award,
   Bookmark,
@@ -479,19 +481,41 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       estado: 'solicitado',
     })
 
-    setSolicitandoId(null)
     if (error) {
+      setSolicitandoId(null)
       alert(`No se pudo solicitar el préstamo: ${error.message}`)
-    } else {
+      return
+    }
+
+    const { data: miPerfil } = await supabase
+      .from('perfiles')
+      .select('nombre, nombre_usuario')
+      .eq('id', userId)
+      .maybeSingle()
+
+    const nombreSolicitante =
+      miPerfil?.nombre || miPerfil?.nombre_usuario || 'Un miembro del club'
+
+    await Promise.allSettled([
       enviarNotificacionPush({
         destinatarioId: ejemplar.propietario_id,
         titulo: `Nueva solicitud en ${clubActivo.nombre}`,
-        cuerpo: `Te han pedido prestado "${ejemplar.libros_catalogo.titulo}"`,
+        cuerpo: `${nombreSolicitante} te ha pedido prestado "${ejemplar.libros_catalogo.titulo}"`,
         url: '/',
-      })
-      alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
-      onSolicitado()
-    }
+      }),
+      enviarNotificacionEmail({
+        tipo: 'prestamo',
+        destinatarioId: ejemplar.propietario_id,
+        asunto: `Exlibris · Solicitud de "${ejemplar.libros_catalogo.titulo}"`,
+        titulo: `Nueva solicitud de préstamo en ${clubActivo.nombre}`,
+        cuerpo: `${nombreSolicitante} te ha pedido prestado "${ejemplar.libros_catalogo.titulo}".\n\nEntra en la pestaña Préstamos de Exlibris para aceptarla o rechazarla.`,
+        url: 'https://exlibris-app.vercel.app',
+      }),
+    ])
+
+    setSolicitandoId(null)
+    alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
+    onSolicitado()
   }
 
   const copiarCodigo = () => {

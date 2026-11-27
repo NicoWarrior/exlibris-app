@@ -7,6 +7,8 @@ import { GENEROS_ESTANDAR, normalizarGenero } from '@/utils/generos'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
 import CriticasPrensaLibro from '@/components/CriticasPrensaLibro'
+import { enviarNotificacionPush } from '@/utils/notificaciones'
+import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 import {
   Award,
   BookCheck,
@@ -495,14 +497,35 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
       if (insertError) throw insertError
 
-      enviarNotificacionPush({
-        destinatarioId: propietarioIdSeguro,
-        titulo: libro.clubNombre
-          ? `Nueva solicitud en ${libro.clubNombre}`
-          : 'Nueva solicitud de préstamo',
-        cuerpo: `Te han pedido prestado "${tituloActual}"`,
-        url: '/',
-      })
+      const { data: miPerfil } = await supabase
+        .from('perfiles')
+        .select('nombre, nombre_usuario')
+        .eq('id', currentUserId)
+        .maybeSingle()
+
+      const nombreSolicitante =
+        miPerfil?.nombre || miPerfil?.nombre_usuario || 'Un lector de Exlibris'
+
+      const tituloAviso = libro.clubNombre
+        ? `Nueva solicitud en ${libro.clubNombre}`
+        : 'Nueva solicitud de préstamo'
+
+      await Promise.allSettled([
+        enviarNotificacionPush({
+          destinatarioId: propietarioIdSeguro,
+          titulo: tituloAviso,
+          cuerpo: `${nombreSolicitante} te ha pedido prestado "${tituloActual}"`,
+          url: '/',
+        }),
+        enviarNotificacionEmail({
+          tipo: 'prestamo',
+          destinatarioId: propietarioIdSeguro,
+          asunto: `Exlibris · Solicitud de "${tituloActual}"`,
+          titulo: tituloAviso,
+          cuerpo: `${nombreSolicitante} te ha pedido prestado "${tituloActual}".\n\nEntra en la pestaña Préstamos de Exlibris para aceptarla o rechazarla.`,
+          url: 'https://exlibris-app.vercel.app',
+        }),
+      ])
 
       setEstadoPrestamoExistente('solicitado')
       onActualizadoRef.current()
