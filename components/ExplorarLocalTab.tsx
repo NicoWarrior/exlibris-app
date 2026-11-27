@@ -101,15 +101,15 @@ const [hayEventosNuevos, setHayEventosNuevos] = useState(false)
 
 const comprobarEventosZona = useCallback(
   async (cpLimpio: string) => {
-    const hoy = new Date().toISOString().split('T')[0]
+    const ahoraIso = new Date().toISOString()
     const prefijoProvincia = cpLimpio.slice(0, 2)
 
     const { data: eventosData, count } = await supabase
       .from('eventos_literarios')
-      .select('id, created_at', { count: 'exact' })
+      .select('id, creado_en', { count: 'exact' })
       .like('codigo_postal', `${prefijoProvincia}%`)
-      .gte('fecha', hoy)
-      .order('created_at', { ascending: false })
+      .gte('fecha_evento', ahoraIso)
+      .order('creado_en', { ascending: false })
       .limit(1)
 
     const total = count || 0
@@ -118,7 +118,7 @@ const comprobarEventosZona = useCallback(
     if (total > 0 && eventosData && eventosData[0] && typeof window !== 'undefined') {
       const claveVisto = `exlibris_tablon_ultimo_visto_${prefijoProvincia}`
       const ultimoVisto = window.localStorage.getItem(claveVisto)
-      const ultimaMarca = eventosData[0].created_at || String(eventosData[0].id)
+      const ultimaMarca = eventosData[0].creado_en || String(eventosData[0].id)
       setHayEventosNuevos(ultimoVisto !== ultimaMarca)
     } else {
       setHayEventosNuevos(false)
@@ -132,7 +132,9 @@ const comprobarEventosZona = useCallback(
       const cpLimpio = cp.replace(/\D/g, '').slice(0, 5)
       if (cpLimpio.length !== 5) {
         setLibrosZona([])
-        return
+        setEventosActivosCount(0)
+        setHayEventosNuevos(false)
+      return
       }
 
       setCargandoLibros(true)
@@ -494,13 +496,13 @@ const comprobarEventosZona = useCallback(
                   const prefijoProvincia = cpActual.slice(0, 2)
                   supabase
                     .from('eventos_literarios')
-                    .select('id, created_at')
+                    .select('id, creado_en')
                     .like('codigo_postal', `${prefijoProvincia}%`)
-                    .order('created_at', { ascending: false })
+                    .order('creado_en', { ascending: false })
                     .limit(1)
                     .then(({ data }) => {
                       if (data && data[0]) {
-                        const marca = data[0].created_at || String(data[0].id)
+                        const marca = data[0].creado_en || String(data[0].id)
                         window.localStorage.setItem(`exlibris_tablon_ultimo_visto_${prefijoProvincia}`, marca)
                       }
                       setHayEventosNuevos(false)
