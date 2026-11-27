@@ -492,22 +492,34 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       .eq('id', userId)
       .maybeSingle()
 
-    const nombreSolicitante =
-      miPerfil?.nombre || miPerfil?.nombre_usuario || 'Un miembro del club'
+    const nombreLimpio =
+      miPerfil?.nombre?.trim() ||
+      miPerfil?.nombre_usuario?.trim() ||
+      'Un lector de Exlibris'
+
+    const nombreClub = clubActivo.nombre
+    const tituloLibro = ejemplar.libros_catalogo.titulo
+
+    const origenTexto = ` dentro del club «${nombreClub}»`
+    const tituloAviso = `Nueva petición en ${nombreClub}`
+    const cuerpoEmail = [
+      `${nombreLimpio} quiere leer «${tituloLibro}»${origenTexto}.`,
+      'Abre la pestaña Préstamos en Exlibris para aceptar, rechazar o escribirle y coordinar la entrega.',
+    ].join('\n\n')
 
     await Promise.allSettled([
       enviarNotificacionPush({
         destinatarioId: ejemplar.propietario_id,
-        titulo: `Nueva solicitud en ${clubActivo.nombre}`,
-        cuerpo: `${nombreSolicitante} te ha pedido prestado "${ejemplar.libros_catalogo.titulo}"`,
+        titulo: tituloAviso,
+        cuerpo: `${nombreLimpio} quiere leer «${tituloLibro}»${origenTexto}`,
         url: '/',
       }),
       enviarNotificacionEmail({
         tipo: 'usuario',
         destinatarioId: ejemplar.propietario_id,
-        asunto: `Exlibris · Solicitud de "${ejemplar.libros_catalogo.titulo}"`,
-        titulo: `Nueva solicitud de préstamo en ${clubActivo.nombre}`,
-        cuerpo: `${nombreSolicitante} te ha pedido prestado "${ejemplar.libros_catalogo.titulo}".\n\nEntra en la pestaña Préstamos de Exlibris para aceptarla o rechazarla.`,
+        asunto: `Exlibris · ${nombreLimpio} quiere leer «${tituloLibro}»`,
+        titulo: tituloAviso,
+        cuerpo: cuerpoEmail,
         url: 'https://exlibris-app.vercel.app',
       }),
     ])
@@ -515,7 +527,6 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setSolicitandoId(null)
     alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
     onSolicitado()
-  }
 
   const copiarCodigo = () => {
     if (!clubActivo) return

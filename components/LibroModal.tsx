@@ -496,32 +496,45 @@ export default function LibroModal({ libro, onClose, onActualizado }: LibroModal
 
       if (insertError) throw insertError
 
-      const { data: miPerfil } = await supabase
+     const { data: miPerfil } = await supabase
         .from('perfiles')
         .select('nombre, nombre_usuario')
         .eq('id', currentUserId)
         .maybeSingle()
 
-      const nombreSolicitante =
-        miPerfil?.nombre || miPerfil?.nombre_usuario || 'Un lector de Exlibris'
+      const nombreLimpio =
+        miPerfil?.nombre?.trim() ||
+        miPerfil?.nombre_usuario?.trim() ||
+        'Un lector de Exlibris'
 
-      const tituloAviso = libro.clubNombre
-        ? `Nueva solicitud en ${libro.clubNombre}`
-        : 'Nueva solicitud de préstamo'
+      const nombreClub = libro.clubNombre || null
+
+      const origenTexto = nombreClub
+        ? ` dentro del club «${nombreClub}»`
+        : ' mediante el préstamo vecinal'
+
+      const tituloAviso = nombreClub
+        ? `Nueva petición en ${nombreClub}`
+        : 'Nueva petición de préstamo'
+
+      const cuerpoEmail = [
+        `${nombreLimpio} quiere leer «${tituloActual}»${origenTexto}.`,
+        'Abre la pestaña Préstamos en Exlibris para aceptar, rechazar o escribirle y coordinar la entrega.',
+      ].join('\n\n')
 
       await Promise.allSettled([
         enviarNotificacionPush({
           destinatarioId: propietarioIdSeguro,
           titulo: tituloAviso,
-          cuerpo: `${nombreSolicitante} te ha pedido prestado "${tituloActual}"`,
+          cuerpo: `${nombreLimpio} quiere leer «${tituloActual}»${origenTexto}`,
           url: '/',
         }),
         enviarNotificacionEmail({
           tipo: 'usuario',
           destinatarioId: propietarioIdSeguro,
-          asunto: `Exlibris · Solicitud de "${tituloActual}"`,
+          asunto: `Exlibris · ${nombreLimpio} quiere leer «${tituloActual}»`,
           titulo: tituloAviso,
-          cuerpo: `${nombreSolicitante} te ha pedido prestado "${tituloActual}".\n\nEntra en la pestaña Préstamos de Exlibris para aceptarla o rechazarla.`,
+          cuerpo: cuerpoEmail,
           url: 'https://exlibris-app.vercel.app',
         }),
       ])
