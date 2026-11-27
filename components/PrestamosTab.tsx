@@ -6,6 +6,7 @@ import { comprimirImagen } from '@/utils/comprimirImagen'
 import { enviarNotificacionPush } from '@/utils/notificaciones'
 import PortadaLibro from '@/components/PortadaLibro'
 import MapaPuntosExlibris, { PuntoExlibris } from '@/components/MapaPuntosExlibris'
+import { enviarNotificacionEmail } from '@/utils/notificacionesEmail'
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -441,6 +442,14 @@ export default function PrestamosTab({ userId, onCambioEstado }: PrestamosTabPro
         titulo: '¡Préstamo aceptado!',
         cuerpo: `Te han aceptado el préstamo de "${item.titulo}". Entra al chat para quedar.`,
         url: '/',
+      })
+      enviarNotificacionEmail({
+        destinatarioId: item.lector_id,
+        asunto: `✅ ¡Préstamo aceptado! "${item.titulo}"`,
+        titulo: `¡Préstamo aceptado!`,
+        cuerpo: `Te han aceptado el préstamo de "${item.titulo}"${
+          item.club_nombre ? ` en el club "${item.club_nombre}"` : ''
+        }.\n\nEntra en el chat de Préstamos para acordar dónde quedar.`,
       })
       await cargarPrestamos()
       onCambioEstadoRef.current()
