@@ -53,7 +53,7 @@ export default function FeedbackModal({
       return
     }
 
-    if (ADMIN_USER_ID && ADMIN_USER_ID !== 'TU_USER_ID_DE_SUPABASE') {
+    if (ADMIN_USER_ID) {
       enviarNotificacionPush({
         destinatarioId: ADMIN_USER_ID,
         titulo: `Feedback (${tipo.toUpperCase()}) de ${nombreUsuario}`,
