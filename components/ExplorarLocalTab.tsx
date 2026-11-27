@@ -140,6 +140,7 @@ const comprobarEventosZona = useCallback(
       setCargandoLibros(true)
       setCpActual(cpLimpio)
       setGeneroFiltro('Todos')
+      await comprobarEventosZona(cpLimpio)
 
       // Buscamos por prefijo provincial (2 dígitos) para priorizar CP exacto y luego alrededores
       const prefijoProvincia = cpLimpio.slice(0, 2)
@@ -235,7 +236,6 @@ const comprobarEventosZona = useCallback(
         })
 
       setLibrosZona(combinados)
-      await comprobarEventosZona(cpLimpio)
       setCargandoLibros(false)
     },
     [supabase, userId, comprobarEventosZona]
