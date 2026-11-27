@@ -50,7 +50,7 @@ export default function FeedbackModal({
     setEnviando(false)
 
     if (error) {
-      const errMsg = (error as { message?: string }).message ?? 'Error desconocido'
+      const errMsg = (error as unknown as { message?: string }).message ?? 'Error desconocido'
       alert(`No se pudo enviar el mensaje: ${errMsg}`)
       return
     }
@@ -74,7 +74,8 @@ export default function FeedbackModal({
     setEnviando(false)
 
     if (error) {
-      alert(`No se pudo enviar el mensaje: ${error.message}`)
+      const errMsg = (error as unknown as { message?: string }).message ?? 'Error desconocido'
+      alert(`No se pudo enviar el mensaje: ${errMsg}`)
       return
     }
 
