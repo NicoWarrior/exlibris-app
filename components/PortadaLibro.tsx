@@ -13,7 +13,7 @@ interface PortadaLibroProps {
   onImagenRota?: () => void
 }
 
-const CACHE_KEY = 'exlibris_portadas_cache_v2'
+const CACHE_KEY = 'exlibris_portadas_cache_v4'
 const memoriaCache = new Map<string, string>()
 const isbnsActualizadosEnDb = new Set<string>()
 let colaFetch: Promise<void> = Promise.resolve()
@@ -42,7 +42,7 @@ function leerCacheLocal(isbn: string): string | null {
 }
 
 function guardarCacheLocal(isbn: string, url: string) {
-  if (isbn.length < 10) return
+  if (isbn.length < 10 || !url) return
   memoriaCache.set(isbn, url)
   if (typeof window === 'undefined') return
   try {
@@ -83,7 +83,6 @@ function buscarEnGoogleBooksEnCola(isbn: string): Promise<string | null> {
           const res = await fetch(endpoint)
           if (res.ok) {
             const data = await res.json()
-            // Verificar que el volumen devuelto realmente corresponda al ISBN buscado
             const itemCoincidente = (data.items || []).find((item: any) => {
               const ids = item?.volumeInfo?.industryIdentifiers || []
               return ids.some(
@@ -158,7 +157,6 @@ export default function PortadaLibro({
     if (!intentadoFallback && isbnAlDisparar.length >= 10) {
       setIntentadoFallback(true)
       const urlRecuperada = await buscarEnGoogleBooksEnCola(isbnAlDisparar)
-      // Descartar si la tarjeta ya cambió a otro libro mientras esperaba
       if (isbnActualRef.current !== isbnAlDisparar) return
 
       if (urlRecuperada && urlRecuperada !== urlActiva) {
