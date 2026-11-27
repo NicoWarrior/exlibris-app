@@ -31,6 +31,7 @@ interface EjemplarLocal {
   propietario_id: string
   codigo_postal: string
   municipio: string | null
+  prioridad_cercania: number
   resenas_count: number
   media_estrellas: string | null
   libros_catalogo: {
@@ -44,16 +45,20 @@ interface EjemplarLocal {
   }
 }
 
-interface ZonaCercana {
-  cp: string
-  ciudad: string | null
-  cantidad: number
-}
-
 interface ExplorarLocalTabProps {
   userId: string
   onAbrirPerfil: () => void
   onSolicitado: () => void
+}
+
+function calcularPrioridadCp(cpItem: string, cpBuscado: string): number {
+  const a = cpItem.trim()
+  const b = cpBuscado.trim()
+  if (a === b) return 0
+  if (a.slice(0, 4) === b.slice(0, 4)) return 1
+  if (a.slice(0, 3) === b.slice(0, 3)) return 2
+  if (a.slice(0, 2) === b.slice(0, 2)) return 3
+  return 4
 }
 
 export default function ExplorarLocalTab({
@@ -65,7 +70,6 @@ export default function ExplorarLocalTab({
   const [cpActual, setCpActual] = useState<string>('')
   const [cpInput, setCpInput] = useState<string>('')
   const [librosZona, setLibrosZona] = useState<EjemplarLocal[]>([])
-  const [zonasCercanas, setZonasCercanas] = useState<ZonaCercana[]>([])
   const [vistaZona, setVistaZona] = useState<'grid' | 'lista'>('grid')
   const [busqueda, setBusqueda] = useState('')
   const [generoFiltro, setGeneroFiltro] = useState<string>('Todos')
@@ -90,87 +94,46 @@ export default function ExplorarLocalTab({
     }
   }, [supabase, userId])
 
-  const buscarZonasCercanas = useCallback(
-    async (cpExacto: string) => {
-      const prefijo = cpExacto.slice(0, 3)
-      const { data: vecinosCercanos } = await supabase
-        .from('perfiles')
-        .select('id, codigo_postal, ciudad')
-        .like('codigo_postal', `${prefijo}%`)
-        .neq('codigo_postal', cpExacto)
-        .eq('busqueda_local_activa', true)
-        .neq('id', userId)
-
-      if (!vecinosCercanos || vecinosCercanos.length === 0) {
-        setZonasCercanas([])
-        return
-      }
-
-      const idsCercanos = vecinosCercanos.map((v) => v.id)
-      const { data: ejemplaresCercanos } = await supabase
-        .from('ejemplares')
-        .select('propietario_id')
-        .in('propietario_id', idsCercanos)
-        .eq('visible_local', true)
-        .eq('estado', 'disponible')
-
-      if (!ejemplaresCercanos || ejemplaresCercanos.length === 0) {
-        setZonasCercanas([])
-        return
-      }
-
-      const mapaPorCp = new Map<string, ZonaCercana>()
-      ejemplaresCercanos.forEach((ej) => {
-        const vecino = vecinosCercanos.find((v) => v.id === ej.propietario_id)
-        if (!vecino?.codigo_postal) return
-        const actual = mapaPorCp.get(vecino.codigo_postal)
-        if (actual) {
-          actual.cantidad += 1
-        } else {
-          mapaPorCp.set(vecino.codigo_postal, {
-            cp: vecino.codigo_postal,
-            ciudad: vecino.ciudad || null,
-            cantidad: 1,
-          })
-        }
-      })
-
-      setZonasCercanas(
-        Array.from(mapaPorCp.values()).sort((a, b) => b.cantidad - a.cantidad)
-      )
-    },
-    [supabase, userId]
-  )
-
   const buscarEnCodigoPostal = useCallback(
     async (cp: string) => {
       const cpLimpio = cp.replace(/\D/g, '').slice(0, 5)
       if (cpLimpio.length !== 5) {
         setLibrosZona([])
-        setZonasCercanas([])
         return
       }
 
       setCargandoLibros(true)
       setCpActual(cpLimpio)
       setGeneroFiltro('Todos')
-      setZonasCercanas([])
+
+      // Buscamos por prefijo provincial (2 dígitos) para priorizar CP exacto y luego alrededores
+      const prefijoProvincia = cpLimpio.slice(0, 2)
 
       const { data: vecinosData } = await supabase
         .from('perfiles')
         .select('id, codigo_postal, ciudad')
-        .eq('codigo_postal', cpLimpio)
+        .like('codigo_postal', `${prefijoProvincia}%`)
         .eq('busqueda_local_activa', true)
         .neq('id', userId)
 
       if (!vecinosData || vecinosData.length === 0) {
         setLibrosZona([])
-        await buscarZonasCercanas(cpLimpio)
         setCargandoLibros(false)
         return
       }
 
-      const vecinoIds = vecinosData.map((v) => v.id)
+      const vecinoPorId = new Map(
+        vecinosData
+          .filter((v) => Boolean(v.codigo_postal))
+          .map((v) => [v.id, v])
+      )
+      const vecinoIds = Array.from(vecinoPorId.keys())
+
+      if (vecinoIds.length === 0) {
+        setLibrosZona([])
+        setCargandoLibros(false)
+        return
+      }
 
       const { data: ejemplaresData } = await supabase
         .from('ejemplares')
@@ -181,7 +144,6 @@ export default function ExplorarLocalTab({
 
       if (!ejemplaresData || ejemplaresData.length === 0) {
         setLibrosZona([])
-        await buscarZonasCercanas(cpLimpio)
         setCargandoLibros(false)
         return
       }
@@ -197,7 +159,8 @@ export default function ExplorarLocalTab({
 
       const combinados: EjemplarLocal[] = ejemplaresData
         .map((ej) => {
-          const vecino = vecinosData.find((v) => v.id === ej.propietario_id)
+          const vecino = vecinoPorId.get(ej.propietario_id)
+          const cpVecino = vecino?.codigo_postal || cpLimpio
           const resenasLibro = resenasData?.filter((r) => r.isbn === ej.isbn) || []
           const media =
             resenasLibro.length > 0
@@ -211,8 +174,9 @@ export default function ExplorarLocalTab({
             isbn: ej.isbn,
             estado: ej.estado,
             propietario_id: ej.propietario_id,
-            codigo_postal: cpLimpio,
+            codigo_postal: cpVecino,
             municipio: vecino?.ciudad || null,
+            prioridad_cercania: calcularPrioridadCp(cpVecino, cpLimpio),
             resenas_count: resenasLibro.length,
             media_estrellas: media,
             libros_catalogo: catalogoData?.find((c) => c.isbn === ej.isbn) || {
@@ -226,16 +190,19 @@ export default function ExplorarLocalTab({
             },
           }
         })
-        .sort((a, b) =>
-          a.libros_catalogo.titulo.localeCompare(b.libros_catalogo.titulo, 'es', {
+        .sort((a, b) => {
+          if (a.prioridad_cercania !== b.prioridad_cercania) {
+            return a.prioridad_cercania - b.prioridad_cercania
+          }
+          return a.libros_catalogo.titulo.localeCompare(b.libros_catalogo.titulo, 'es', {
             sensitivity: 'base',
           })
-        )
+        })
 
       setLibrosZona(combinados)
       setCargandoLibros(false)
     },
-    [supabase, userId, buscarZonasCercanas]
+    [supabase, userId]
   )
 
   useEffect(() => {
@@ -365,7 +332,9 @@ export default function ExplorarLocalTab({
     return librosZona.filter(
       (l) =>
         l.libros_catalogo?.titulo?.toLowerCase().includes(termino) ||
-        l.libros_catalogo?.autor?.toLowerCase().includes(termino)
+        l.libros_catalogo?.autor?.toLowerCase().includes(termino) ||
+        l.codigo_postal.includes(termino) ||
+        (l.municipio && l.municipio.toLowerCase().includes(termino))
     )
   }, [librosZona, busqueda])
 
@@ -387,6 +356,12 @@ export default function ExplorarLocalTab({
     return librosPorTexto.filter((l) => (l.libros_catalogo?.genero || 'Otros') === generoFiltro)
   }, [librosPorTexto, generoFiltro])
 
+  const resumenCercania = useMemo(() => {
+    const exactos = librosZona.filter((l) => l.prioridad_cercania === 0).length
+    const cercanos = librosZona.length - exactos
+    return { exactos, cercanos }
+  }, [librosZona])
+
   if (cargandoPerfil) {
     return (
       <div className="py-12 text-center text-xs text-stone-500">
@@ -401,7 +376,7 @@ export default function ExplorarLocalTab({
         <div>
           <h1 className="text-lg font-bold text-stone-900">Explorar en tu Barrio</h1>
           <p className="text-xs text-stone-500">
-            Libros disponibles de forma anónima por código postal
+            Primero tu código postal y, a continuación, los alrededores disponibles
           </p>
         </div>
 
@@ -442,7 +417,7 @@ export default function ExplorarLocalTab({
               Introduce un código postal o guarda el tuyo
             </h2>
             <p className="text-xs text-stone-500 max-w-xs mx-auto">
-              Escribe arriba un código postal de 5 dígitos para ver libros cercanos o configura tu zona en Mi Perfil.
+              Escribe arriba un código postal de 5 dígitos para ver libros en tu zona y alrededores o configura tu CP en Mi Perfil.
             </p>
           </div>
           <button
@@ -505,7 +480,18 @@ export default function ExplorarLocalTab({
           )}
 
           {librosZona.length > 0 && (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-stone-500 px-0.5">
+                <span>
+                  Mostrando <strong className="text-stone-800">{librosZona.length}</strong>{' '}
+                  {librosZona.length === 1 ? 'ejemplar' : 'ejemplares'} desde{' '}
+                  <strong className="text-stone-800">CP {cpActual}</strong>
+                </span>
+                <span>
+                  {resumenCercania.exactos} en tu CP · {resumenCercania.cercanos} en alrededores
+                </span>
+              </div>
+
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -513,7 +499,7 @@ export default function ExplorarLocalTab({
                     type="text"
                     value={busqueda}
                     onChange={(e) => setBusqueda(e.target.value)}
-                    placeholder={`Filtrar libros en CP ${cpActual} por título o autor...`}
+                    placeholder={`Filtrar cerca de CP ${cpActual} por título, autor o CP...`}
                     className="w-full pl-9 pr-8 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
                   />
                   {busqueda && (
@@ -592,7 +578,7 @@ export default function ExplorarLocalTab({
 
           {cargandoLibros ? (
             <div className="py-10 text-center text-xs text-stone-500">
-              Buscando ejemplares disponibles en CP {cpActual}...
+              Buscando ejemplares en CP {cpActual} y alrededores...
             </div>
           ) : librosZona.length === 0 ? (
             <div className="bg-white border border-stone-200 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xs">
@@ -602,39 +588,13 @@ export default function ExplorarLocalTab({
                   <span>CP {cpActual} · Vista previa del barrio</span>
                 </span>
                 <h2 className="font-bold text-stone-900 text-base">
-                  Aún no hay libros activos en el CP {cpActual}
+                  Aún no hay libros activos cerca del CP {cpActual}
                 </h2>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  Así aparecerán los ejemplares anónimos de tus vecinos. Puedes explorar un código postal cercano o estrenar esta zona activando alguno de tus libros desde Estantería.
+                  Así aparecerán los ejemplares anónimos de tus vecinos. Puedes estrenar esta zona activando alguno de tus libros desde Estantería.
                 </p>
               </div>
 
-              {zonasCercanas.length > 0 && (
-                <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 space-y-2 max-w-md mx-auto">
-                  <p className="text-[11px] font-semibold text-emerald-900 text-center">
-                    Hay libros disponibles en códigos postales cercanos:
-                  </p>
-                  <div className="flex flex-wrap justify-center gap-1.5">
-                    {zonasCercanas.map((z) => (
-                      <button
-                        key={z.cp}
-                        type="button"
-                        onClick={() => {
-                          setCpInput(z.cp)
-                          buscarEnCodigoPostal(z.cp)
-                        }}
-                        className="px-3 py-1.5 bg-white hover:bg-emerald-700 hover:text-white text-emerald-900 border border-emerald-300 rounded-lg text-[11px] font-semibold transition cursor-pointer"
-                      >
-                        CP {z.cp}
-                        {z.ciudad ? ` (${z.ciudad})` : ''} · {z.cantidad}{' '}
-                        {z.cantidad === 1 ? 'libro' : 'libros'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Tarjetas de ejemplo (desaparecen al haber libros reales en el CP) */}
               <div className="grid grid-cols-3 gap-2.5 sm:gap-3 max-w-md mx-auto select-none pointer-events-none">
                 {[
                   {
@@ -696,7 +656,7 @@ export default function ExplorarLocalTab({
           ) : librosFiltrados.length === 0 ? (
             <div className="bg-white border border-stone-200 rounded-2xl p-8 text-center">
               <p className="text-xs font-semibold text-stone-700">
-                No hay libros que coincidan con ese filtro en el CP {cpActual}
+                No hay libros que coincidan con ese filtro cerca del CP {cpActual}
               </p>
               <button
                 type="button"
@@ -711,96 +671,106 @@ export default function ExplorarLocalTab({
             </div>
           ) : vistaZona === 'grid' ? (
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 sm:gap-3">
-              {librosFiltrados.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => abrirDetalleLocal(item)}
-                  className="group bg-white rounded-xl border border-stone-200/90 overflow-hidden shadow-2xs flex flex-col cursor-pointer hover:border-emerald-500 hover:shadow-sm transition"
-                >
-                  <div className="aspect-[2/3] bg-stone-100 relative overflow-hidden">
-                    <PortadaLibro
-                      src={item.libros_catalogo?.portada_url}
-                      alt={item.libros_catalogo?.titulo || 'Libro'}
-                      isbn={item.isbn}
-                    />
+              {librosFiltrados.map((item) => {
+                const esCpExacto = item.prioridad_cercania === 0
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => abrirDetalleLocal(item)}
+                    className="group bg-white rounded-xl border border-stone-200/90 overflow-hidden shadow-2xs flex flex-col cursor-pointer hover:border-emerald-500 hover:shadow-sm transition"
+                  >
+                    <div className="aspect-[2/3] bg-stone-100 relative overflow-hidden">
+                      <PortadaLibro
+                        src={item.libros_catalogo?.portada_url}
+                        alt={item.libros_catalogo?.titulo || 'Libro'}
+                        isbn={item.isbn}
+                      />
 
-                    {item.libros_catalogo?.premios && (
+                      {item.libros_catalogo?.premios && (
+                        <span
+                          title={item.libros_catalogo.premios}
+                          className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-2xs"
+                        >
+                          <Award className="w-2.5 h-2.5" />
+                        </span>
+                      )}
+
                       <span
-                        title={item.libros_catalogo.premios}
-                        className="absolute top-1.5 left-1.5 bg-amber-400/95 text-amber-950 p-1 rounded-full shadow-2xs"
-                      >
-                        <Award className="w-2.5 h-2.5" />
-                      </span>
-                    )}
-
-                    <span className="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-2xs bg-sky-100/95 text-sky-900">
-                      {item.codigo_postal}
-                    </span>
-
-                    {item.media_estrellas && (
-                      <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-2xs">
-                        <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                        <span>{item.media_estrellas}</span>
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="p-2 flex-1 flex flex-col justify-between gap-1.5">
-                    <div>
-                      <h3 className="font-semibold text-stone-900 text-[11px] leading-snug line-clamp-2 group-hover:text-emerald-800 transition">
-                        {item.libros_catalogo?.titulo}
-                      </h3>
-                      <p className="text-[10px] text-stone-500 mt-0.5 truncate">
-                        {item.libros_catalogo?.autor}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-1 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          solicitarPrestamoLocal(item)
-                        }}
-                        disabled={solicitandoId === item.id}
-                        className="flex-1 py-1 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
-                      >
-                        <Send className="w-2.5 h-2.5" />
-                        <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          toggleDeseo(item)
-                        }}
-                        disabled={guardandoDeseoId === item.id}
-                        title={
-                          deseosIsbns.has(item.isbn)
-                            ? 'Quitar de mi lista ¡Me lo apunto!'
-                            : 'Guardar en mi lista ¡Me lo apunto!'
-                        }
-                        className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
-                          deseosIsbns.has(item.isbn)
-                            ? 'bg-amber-50 border-amber-300 text-amber-700'
-                            : 'bg-stone-50 border-stone-200 text-stone-500 hover:text-stone-800'
+                        className={`absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-md shadow-2xs ${
+                          esCpExacto
+                            ? 'bg-emerald-100/95 text-emerald-900'
+                            : 'bg-sky-100/95 text-sky-900'
                         }`}
                       >
-                        {deseosIsbns.has(item.isbn) ? (
-                          <BookmarkCheck className="w-3 h-3" />
-                        ) : (
-                          <Bookmark className="w-3 h-3" />
-                        )}
-                      </button>
+                        {item.codigo_postal}
+                      </span>
+
+                      {item.media_estrellas && (
+                        <span className="absolute bottom-1.5 left-1.5 bg-stone-900/85 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-2xs">
+                          <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                          <span>{item.media_estrellas}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="p-2 flex-1 flex flex-col justify-between gap-1.5">
+                      <div>
+                        <h3 className="font-semibold text-stone-900 text-[11px] leading-snug line-clamp-2 group-hover:text-emerald-800 transition">
+                          {item.libros_catalogo?.titulo}
+                        </h3>
+                        <p className="text-[10px] text-stone-500 mt-0.5 truncate">
+                          {item.libros_catalogo?.autor}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            solicitarPrestamoLocal(item)
+                          }}
+                          disabled={solicitandoId === item.id}
+                          className="flex-1 py-1 px-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                        >
+                          <Send className="w-2.5 h-2.5" />
+                          <span>{solicitandoId === item.id ? 'Pidiendo...' : 'Pedir'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleDeseo(item)
+                          }}
+                          disabled={guardandoDeseoId === item.id}
+                          title={
+                            deseosIsbns.has(item.isbn)
+                              ? 'Quitar de mi lista ¡Me lo apunto!'
+                              : 'Guardar en mi lista ¡Me lo apunto!'
+                          }
+                          className={`p-1.5 rounded-lg border transition cursor-pointer shrink-0 ${
+                            deseosIsbns.has(item.isbn)
+                              ? 'bg-amber-50 border-amber-300 text-amber-700'
+                              : 'bg-stone-50 border-stone-200 text-stone-500 hover:text-stone-800'
+                          }`}
+                        >
+                          {deseosIsbns.has(item.isbn) ? (
+                            <BookmarkCheck className="w-3 h-3" />
+                          ) : (
+                            <Bookmark className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="space-y-2">
               {librosFiltrados.map((item) => {
+                const esCpExacto = item.prioridad_cercania === 0
                 const etiquetaVecino = item.municipio
                   ? `Vecino · ${item.municipio} (${item.codigo_postal})`
                   : `Vecino · CP ${item.codigo_postal}`
@@ -820,9 +790,20 @@ export default function ExplorarLocalTab({
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-stone-900 text-xs line-clamp-1">
-                        {item.libros_catalogo?.titulo}
-                      </h3>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="font-semibold text-stone-900 text-xs line-clamp-1">
+                          {item.libros_catalogo?.titulo}
+                        </h3>
+                        <span
+                          className={`shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                            esCpExacto
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : 'bg-sky-100 text-sky-900'
+                          }`}
+                        >
+                          {esCpExacto ? 'Tu CP' : 'Cerca'}
+                        </span>
+                      </div>
                       <p className="text-[11px] text-stone-500 truncate mt-0.5">
                         {item.libros_catalogo?.autor}
                       </p>
