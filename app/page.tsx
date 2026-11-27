@@ -10,6 +10,7 @@ import ExplorarLocalTab from '@/components/ExplorarLocalTab'
 import PrestamosTab from '@/components/PrestamosTab'
 import LibroModal, { LibroDetalle } from '@/components/LibroModal'
 import PerfilModal from '@/components/PerfilModal'
+import FeedbackModal from '@/components/FeedbackModal'
 import PortadaLibro from '@/components/PortadaLibro'
 import InstalarAppBanner from '@/components/InstalarAppBanner'
 import {
@@ -23,6 +24,7 @@ import {
   List,
   LogOut,
   MapPin,
+  MessageSquarePlus,
   Plus,
   ScanBarcode,
   Search,
@@ -61,6 +63,13 @@ interface LibroDeseo {
   estado_actual?: string | null
 }
 
+const ETIQUETAS_PANTALLA: Record<'estanteria' | 'clubes' | 'barrio' | 'prestamos', string> = {
+  estanteria: 'Estantería',
+  clubes: 'Clubes',
+  barrio: 'Barrio',
+  prestamos: 'Préstamos',
+}
+
 export default function Home() {
   const [user, setUser] = useState<any>(null)
   const [aliasUsuario, setAliasUsuario] = useState<string>('')
@@ -77,6 +86,7 @@ export default function Home() {
   const [notificacionesPrestamosCount, setNotificacionesPrestamosCount] = useState(0)
   const [showScanner, setShowScanner] = useState(false)
   const [showPerfil, setShowPerfil] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
   const [libroSeleccionado, setLibroSeleccionado] = useState<LibroDetalle | null>(null)
   const [pushActivo, setPushActivo] = useState(false)
   const [activandoPush, setActivandoPush] = useState(false)
@@ -449,6 +459,15 @@ export default function Home() {
             <span>Exlibris</span>
           </div>
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setShowFeedback(true)}
+              className="p-2 rounded-lg border border-stone-200/80 text-stone-600 hover:text-emerald-700 hover:bg-emerald-50/70 hover:border-emerald-200 transition cursor-pointer"
+              title="Reportar un fallo o enviar una sugerencia a Nico"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+            </button>
+
             <button
               type="button"
               onClick={handleActivarNotificaciones}
@@ -985,6 +1004,14 @@ export default function Home() {
         defaultName={aliasUsuario}
         onClose={() => setShowPerfil(false)}
         onPerfilGuardado={(nuevoAlias) => setAliasUsuario(nuevoAlias)}
+      />
+
+      <FeedbackModal
+        abierto={showFeedback}
+        onClose={() => setShowFeedback(false)}
+        userId={user.id}
+        nombreUsuario={aliasUsuario || user.email || 'Usuario'}
+        pantallaActual={ETIQUETAS_PANTALLA[tab]}
       />
     </div>
   )
