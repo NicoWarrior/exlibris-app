@@ -527,7 +527,7 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
     setSolicitandoId(null)
     alert(`Solicitud enviada a ${ejemplar.propietario_nombre}.`)
     onSolicitado()
-
+  }
   const copiarCodigo = () => {
     if (!clubActivo) return
     navigator.clipboard.writeText(clubActivo.codigo_invitacion)
