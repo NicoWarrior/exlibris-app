@@ -679,32 +679,32 @@ export default function ClubesTab({ userId, onSolicitado }: ClubesTabProps) {
       </div>
 
       {modoFormulario === 'crear' && (
-        <form
-          onSubmit={crearClub}
-          className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs space-y-3"
-        >
-          <label className="block text-xs font-semibold text-stone-700">
-            Nombre del nuevo club de lectura
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={nombreNuevoClub}
-              onChange={(e) => setNombreNuevoClub(e.target.value)}
-              placeholder="Ej. Lectores Donostia"
-              className="flex-1 px-3 py-2 border border-stone-300 rounded-xl text-xs focus:outline-none focus:border-emerald-600"
-              required
-            />
-            <button
-              type="submit"
-              disabled={procesando}
-              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold cursor-pointer"
-            >
-              Crear
-            </button>
-          </div>
-        </form>
-      )}
+  <form
+    onSubmit={crearClub}
+    className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs space-y-3"
+  >
+    <label className="block text-xs font-semibold text-stone-700">
+      Nombre del nuevo club de lectura
+    </label>
+    <div className="flex gap-2">
+      <input
+        type="text"
+        value={nombreNuevoClub}
+        onChange={(e) => setNombreNuevoClub(e.target.value)}
+        placeholder="Ej. Lectores Donostia"
+        className="flex-1 px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600"
+        required
+      />
+      <button
+        type="submit"
+        disabled={procesando}
+        className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-semibold cursor-pointer"
+      >
+        Crear
+      </button>
+    </div>
+  </form>
+)}
 
       {modoFormulario === 'unirse' && (
         <form
